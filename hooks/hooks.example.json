@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/codex-refine.mjs\" --hook",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
