@@ -17,7 +17,20 @@ test/codex-refine-core.test.mjs
 
 ## Usage
 
-Install this folder as a Claude Code plugin, then run:
+Install from GitHub:
+
+```bash
+claude plugin marketplace add saadjs/codex-advisor
+claude plugin install codex-advisor@codex-advisor
+```
+
+Or load a local checkout for development:
+
+```bash
+claude --plugin-dir /path/to/codex-advisor
+```
+
+Then run:
 
 ```text
 Use the refine skill to refine this request: add retry logic to the uploader
