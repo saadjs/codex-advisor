@@ -9,17 +9,6 @@ Codex Advisor is a Claude Code plugin that asks `codex app-server` to rewrite a 
 
 The default path is the `refine` skill. That keeps the user in the loop before Claude acts on the rewritten prompt and avoids adding a Codex round trip to every message.
 
-## Layout
-
-```text
-.claude-plugin/plugin.json
-skills/refine/SKILL.md
-hooks/hooks.example.json
-scripts/codex-refine.mjs
-scripts/codex-refine-core.mjs
-test/codex-refine-core.test.mjs
-```
-
 ## Usage
 
 Install from GitHub:
