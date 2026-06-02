@@ -4,11 +4,16 @@ import test from "node:test";
 import {
   buildAuthoritativeContext,
   buildRefinementInstruction,
+  DEFAULT_MODEL,
   formatHookOutput,
   parseArgs,
   runAppServerTurn,
   shouldSkipHook,
 } from "../scripts/codex-refine-core.mjs";
+
+test("uses gpt-5.5 as the default Codex model", () => {
+  assert.equal(DEFAULT_MODEL, "gpt-5.5");
+});
 
 test("buildRefinementInstruction asks Codex to rewrite instead of clarify", () => {
   const instruction = buildRefinementInstruction("fix upload retries");

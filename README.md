@@ -62,7 +62,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-refine.mjs" --hook --hook-output=both
 Useful environment variables:
 
 ```bash
-CODEX_ADVISOR_MODEL=gpt-5.4
+CODEX_ADVISOR_MODEL=gpt-5.5
 CODEX_ADVISOR_TIMEOUT_MS=90000
 CODEX_ADVISOR_MIN_CHARS=40
 CODEX_ADVISOR_DISABLE=1

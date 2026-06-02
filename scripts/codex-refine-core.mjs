@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
-export const DEFAULT_MODEL = "gpt-5.4";
+export const DEFAULT_MODEL = "gpt-5.5";
 export const DEFAULT_TIMEOUT_MS = 90000;
 export const DEFAULT_MIN_HOOK_CHARS = 40;
 
