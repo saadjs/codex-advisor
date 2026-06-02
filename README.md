@@ -1,5 +1,10 @@
 # Codex Advisor
 
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-8A63D2)](https://docs.claude.com/en/docs/claude-code/plugins)
+[![Codex app-server](https://img.shields.io/badge/Codex-app--server-111827)](https://developers.openai.com/codex/app-server)
+[![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![GitHub last commit](https://img.shields.io/github/last-commit/saadjs/codex-advisor)](https://github.com/saadjs/codex-advisor/commits/main)
+
 Codex Advisor is a Claude Code plugin that asks `codex app-server` to rewrite a rough request into a precise coding-agent spec.
 
 The default path is the `refine` skill. That keeps the user in the loop before Claude acts on the rewritten prompt and avoids adding a Codex round trip to every message.
