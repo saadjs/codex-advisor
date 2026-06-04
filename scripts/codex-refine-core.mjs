@@ -156,6 +156,8 @@ export function parseArgs(argv) {
     hookOutput: "standard",
     text: null,
     withContext: false,
+    model: null,
+    effort: null,
   };
   const rest = [];
 
@@ -168,6 +170,12 @@ export function parseArgs(argv) {
     } else if (arg === "--text") {
       args.mode = "text";
       args.text = argv[i + 1] ?? "";
+      i += 1;
+    } else if (arg === "--model") {
+      args.model = argv[i + 1] ?? "";
+      i += 1;
+    } else if (arg === "--effort") {
+      args.effort = argv[i + 1] ?? "";
       i += 1;
     } else if (arg.startsWith("--hook-output=")) {
       args.hookOutput = arg.slice("--hook-output=".length);
