@@ -3,6 +3,7 @@ import {
   extractPromptFromHookInput,
   formatHookOutput,
   parseArgs,
+  parseRevisePayload,
   readAll,
   runCodexRefinement,
   shouldSkipHook,
@@ -23,6 +24,24 @@ async function main() {
       withContext: args.withContext,
     });
     process.stdout.write(JSON.stringify(formatHookOutput(refinedSpec, { hookOutput: args.hookOutput })));
+    return;
+  }
+
+  if (args.mode === "revise") {
+    const { request, priorSpec, findings, revisionNotes } = parseRevisePayload(await readAll(process.stdin));
+    if (!request.trim()) {
+      throw new Error("Revise payload is missing a <<<REQUEST>>> section.");
+    }
+    if (!priorSpec.trim()) {
+      throw new Error("Revise payload is missing a <<<PRIOR_SPEC>>> section.");
+    }
+
+    const revisedSpec = await runCodexRefinement(request, {
+      priorSpec,
+      claudeFindings: findings,
+      revisionNotes,
+    });
+    process.stdout.write(`${revisedSpec.trim()}\n`);
     return;
   }
 

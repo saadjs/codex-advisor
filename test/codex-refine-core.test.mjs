@@ -8,6 +8,7 @@ import {
   DEFAULT_MODEL,
   formatHookOutput,
   parseArgs,
+  parseRevisePayload,
   runAppServerTurn,
   runCodexRefinement,
   shouldSkipHook,
@@ -56,6 +57,39 @@ test("buildRefinementInstruction with repositoryContext resolves assumptions fro
   assert.match(instruction, /fix upload retries/);
 });
 
+test("buildRefinementInstruction in revise mode folds in prior spec, findings, and notes", () => {
+  const instruction = buildRefinementInstruction("fix upload retries", {
+    priorSpec: "Goal: add retries to uploadWithRetries().",
+    claudeFindings: "uploadWithRetries lives in src/uploader.js, not src/upload.js.",
+    revisionNotes: "Cap retries at 3 attempts.",
+  });
+
+  assert.match(instruction, /You previously produced a spec/);
+  assert.match(instruction, /<revision_resolution_policy>/);
+  assert.match(instruction, /<structured_output_contract>/);
+  assert.match(instruction, /<prior_spec>/);
+  assert.match(instruction, /add retries to uploadWithRetries/);
+  assert.match(instruction, /<claude_findings>/);
+  assert.match(instruction, /src\/uploader\.js/);
+  assert.match(instruction, /<revision_notes>/);
+  assert.match(instruction, /Cap retries at 3 attempts/);
+  assert.match(instruction, /<user_request>/);
+  assert.match(instruction, /fix upload retries/);
+  assert.doesNotMatch(instruction, /Rewrite the user's request/);
+});
+
+test("buildRefinementInstruction in revise mode omits the notes block when notes are empty", () => {
+  const instruction = buildRefinementInstruction("fix upload retries", {
+    priorSpec: "Goal: add retries.",
+    claudeFindings: "Confirmed src/uploader.js.",
+    revisionNotes: "",
+  });
+
+  assert.match(instruction, /<prior_spec>/);
+  assert.match(instruction, /<claude_findings>/);
+  assert.doesNotMatch(instruction, /<revision_notes>/);
+});
+
 test("formatHookOutput uses current Claude Code systemMessage output by default", () => {
   const output = formatHookOutput("Goal: Add retry logic.");
 
@@ -100,6 +134,51 @@ test("parseArgs supports context-aware text mode", () => {
     mode: "text",
     text: "fix the test",
     withContext: true,
+  });
+});
+
+test("parseArgs supports revise mode", () => {
+  assert.deepEqual(parseArgs(["--revise"]), {
+    hookOutput: "standard",
+    mode: "revise",
+    text: null,
+    withContext: false,
+  });
+});
+
+test("parseRevisePayload splits delimited sections and tolerates missing notes", () => {
+  const payload = [
+    "<<<REQUEST>>>",
+    "fix upload retries",
+    "<<<PRIOR_SPEC>>>",
+    "Goal: add retries.",
+    "<<<FINDINGS>>>",
+    "uploadWithRetries is in src/uploader.js.",
+    "<<<REVISION_NOTES>>>",
+    "Cap retries at 3.",
+  ].join("\n");
+
+  assert.deepEqual(parseRevisePayload(payload), {
+    request: "fix upload retries",
+    priorSpec: "Goal: add retries.",
+    findings: "uploadWithRetries is in src/uploader.js.",
+    revisionNotes: "Cap retries at 3.",
+  });
+
+  const withoutNotes = [
+    "<<<REQUEST>>>",
+    "fix upload retries",
+    "<<<PRIOR_SPEC>>>",
+    "Goal: add retries.",
+    "<<<FINDINGS>>>",
+    "Confirmed src/uploader.js.",
+  ].join("\n");
+
+  assert.deepEqual(parseRevisePayload(withoutNotes), {
+    request: "fix upload retries",
+    priorSpec: "Goal: add retries.",
+    findings: "Confirmed src/uploader.js.",
+    revisionNotes: "",
   });
 });
 
@@ -225,4 +304,59 @@ test("runCodexRefinement with context sends context-aware instruction with the m
   assert.equal(turnStart.params.model, "gpt-5.4-mini");
   assert.match(turnStart.params.input[0].text, /Turn ASSUMPTIONs into concrete, correct references/);
   assert.match(turnStart.params.input[0].text, /src\/upload\.js/);
+});
+
+test("runCodexRefinement in revise mode sends the revise instruction with the flagship model", async () => {
+  const writes = [];
+  const fakeChild = {
+    killed: false,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill() {
+      this.killed = true;
+    },
+    once(event, handler) {
+      this[`on_${event}`] = handler;
+      return this;
+    },
+  };
+  fakeChild.stdin.on("data", (chunk) => {
+    for (const line of String(chunk).trim().split("\n")) {
+      if (line) writes.push(JSON.parse(line));
+    }
+  });
+
+  const resultPromise = runCodexRefinement("fix upload retries", {
+    cwd: "/repo",
+    priorSpec: "Goal: add retries.",
+    claudeFindings: "uploadWithRetries lives in src/uploader.js.",
+    revisionNotes: "Cap retries at 3.",
+    spawnCodex: () => fakeChild,
+    timeoutMs: 1000,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 0, result: {} })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({
+    method: "item/completed",
+    params: {
+      item: {
+        phase: "final_answer",
+        text: "Goal: Tightened spec.",
+        type: "agentMessage",
+      },
+    },
+  })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+
+  assert.equal(await resultPromise, "Goal: Tightened spec.");
+
+  const turnStart = writes.find((message) => message.method === "turn/start");
+  assert.equal(turnStart.params.model, "gpt-5.5");
+  assert.match(turnStart.params.input[0].text, /You previously produced a spec/);
+  assert.match(turnStart.params.input[0].text, /src\/uploader\.js/);
+  assert.match(turnStart.params.input[0].text, /Cap retries at 3/);
 });

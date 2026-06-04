@@ -60,6 +60,34 @@ const SELF_DIRECTED_BLOCKS = [
   ].join("\n"),
 ];
 
+const REVISE_BLOCKS = [
+  [
+    "<task>",
+    "You previously produced a spec for the user's request. The coding agent has since explored the repository and reported verified findings, and the user may have requested revisions.",
+    "Produce an updated, tightened spec for a coding agent.",
+    "Promote ASSUMPTIONs that the findings resolve into concrete, correct facts (real file paths, symbols, commands, tests).",
+    "Apply the user's revision notes precisely.",
+    "Do not ask clarifying questions.",
+    "Do not broaden the user's intent.",
+    "</task>",
+  ].join("\n"),
+  OUTPUT_CONTRACT_BLOCK,
+  [
+    "<revision_resolution_policy>",
+    "Treat the coding agent's findings as authoritative for repository facts.",
+    "When a finding contradicts the prior spec, correct the spec to match the finding.",
+    "Keep an ASSUMPTION only when neither the findings nor any supplied context resolves a fact that changes correctness, scope, safety, or verification.",
+    "Preserve parts of the prior spec that the findings and revision notes do not touch.",
+    "</revision_resolution_policy>",
+  ].join("\n"),
+  ACTION_SAFETY_BLOCK,
+  [
+    "<verification_loop>",
+    "Before finalizing, confirm every revision note is reflected and no fact the findings resolved is still left as an ASSUMPTION.",
+    "</verification_loop>",
+  ].join("\n"),
+];
+
 const CONTEXT_AWARE_BLOCKS = [
   [
     "<task>",
@@ -89,14 +117,23 @@ const CONTEXT_AWARE_BLOCKS = [
   ].join("\n"),
 ];
 
-export function buildRefinementInstruction(userPrompt, { repositoryContext = null } = {}) {
+export function buildRefinementInstruction(userPrompt, {
+  repositoryContext = null,
+  priorSpec = null,
+  claudeFindings = null,
+  revisionNotes = null,
+} = {}) {
   const contextText = repositoryContext == null
     ? null
     : typeof repositoryContext === "string"
       ? repositoryContext
       : formatRepositoryContext(repositoryContext);
 
-  const blocks = [...(contextText == null ? SELF_DIRECTED_BLOCKS : CONTEXT_AWARE_BLOCKS)];
+  const isRevise = priorSpec != null;
+  const baseBlocks = isRevise
+    ? REVISE_BLOCKS
+    : contextText == null ? SELF_DIRECTED_BLOCKS : CONTEXT_AWARE_BLOCKS;
+  const blocks = [...baseBlocks];
 
   if (contextText != null) {
     blocks.push([
@@ -106,6 +143,28 @@ export function buildRefinementInstruction(userPrompt, { repositoryContext = nul
     ].join("\n"));
   }
 
+  if (isRevise) {
+    blocks.push([
+      "<prior_spec>",
+      priorSpec.trim(),
+      "</prior_spec>",
+    ].join("\n"));
+
+    blocks.push([
+      "<claude_findings>",
+      (claudeFindings ?? "").trim() || "(no findings reported)",
+      "</claude_findings>",
+    ].join("\n"));
+
+    if ((revisionNotes ?? "").trim()) {
+      blocks.push([
+        "<revision_notes>",
+        revisionNotes.trim(),
+        "</revision_notes>",
+      ].join("\n"));
+    }
+  }
+
   blocks.push([
     "<user_request>",
     userPrompt.trim(),
@@ -113,6 +172,32 @@ export function buildRefinementInstruction(userPrompt, { repositoryContext = nul
   ].join("\n"));
 
   return blocks.join("\n\n");
+}
+
+const REVISE_PAYLOAD_SECTIONS = [
+  ["request", "<<<REQUEST>>>"],
+  ["priorSpec", "<<<PRIOR_SPEC>>>"],
+  ["findings", "<<<FINDINGS>>>"],
+  ["revisionNotes", "<<<REVISION_NOTES>>>"],
+];
+
+// Parse the section-delimited stdin payload used by --revise. Sections are
+// addressed by their literal markers, and absent sections yield empty strings.
+export function parseRevisePayload(stdin) {
+  const text = String(stdin ?? "");
+  const present = REVISE_PAYLOAD_SECTIONS
+    .map(([key, marker]) => ({ key, marker, index: text.indexOf(marker) }))
+    .filter((section) => section.index !== -1)
+    .sort((a, b) => a.index - b.index);
+
+  const result = { request: "", priorSpec: "", findings: "", revisionNotes: "" };
+  for (let i = 0; i < present.length; i += 1) {
+    const { key, marker, index } = present[i];
+    const start = index + marker.length;
+    const end = i + 1 < present.length ? present[i + 1].index : text.length;
+    result[key] = text.slice(start, end).trim();
+  }
+  return result;
 }
 
 export function buildAuthoritativeContext(refinedSpec) {
@@ -157,6 +242,8 @@ export function parseArgs(argv) {
       args.mode = "hook";
     } else if (arg === "--with-context") {
       args.withContext = true;
+    } else if (arg === "--revise") {
+      args.mode = "revise";
     } else if (arg === "--text") {
       args.mode = "text";
       args.text = argv[i + 1] ?? "";
@@ -209,9 +296,15 @@ export async function readAll(stream) {
 export async function runCodexRefinement(userPrompt, options = {}) {
   const env = options.env ?? process.env;
   const withContext = options.withContext ?? false;
-  const model = options.model ?? (withContext
-    ? env.CODEX_ADVISOR_CONTEXT_MODEL ?? env.CODEX_ADVISOR_MODEL ?? DEFAULT_CONTEXT_MODEL
-    : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
+  const priorSpec = options.priorSpec ?? null;
+  const claudeFindings = options.claudeFindings ?? null;
+  const revisionNotes = options.revisionNotes ?? null;
+  const isRevise = priorSpec != null;
+  const model = options.model ?? (isRevise
+    ? env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL
+    : withContext
+      ? env.CODEX_ADVISOR_CONTEXT_MODEL ?? env.CODEX_ADVISOR_MODEL ?? DEFAULT_CONTEXT_MODEL
+      : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
   const timeoutMs = options.timeoutMs ?? Number.parseInt(env.CODEX_ADVISOR_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`, 10);
   const cwd = options.cwd ?? process.cwd();
   const effort = options.effort ?? env.CODEX_ADVISOR_EFFORT ?? "low";
@@ -230,7 +323,12 @@ export async function runCodexRefinement(userPrompt, options = {}) {
     codexBin,
     cwd,
     effort,
-    instruction: buildRefinementInstruction(userPrompt, { repositoryContext }),
+    instruction: buildRefinementInstruction(userPrompt, {
+      repositoryContext,
+      priorSpec,
+      claudeFindings,
+      revisionNotes,
+    }),
     model,
     spawnCodex,
     timeoutMs,
