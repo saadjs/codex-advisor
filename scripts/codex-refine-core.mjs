@@ -8,8 +8,10 @@ export const DEFAULT_CONTEXT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_TIMEOUT_MS = 90000;
 export const DEFAULT_MIN_HOOK_CHARS = 40;
 export const DEFAULT_EFFORT = "low";
-// Codex app-server ReasoningEffort enum (none < minimal < low < medium < high < xhigh).
-export const VALID_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+// The authoritative effort set is per-model (model/list -> supportedReasoningEfforts).
+// This is a fail-fast typo guard covering the levels the models this plugin uses
+// advertise (gpt-5.5 / gpt-5.4-mini): low < medium < high < xhigh.
+export const VALID_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 
 export function normalizeEffort(value) {
   if (VALID_EFFORTS.has(value)) return value;

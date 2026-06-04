@@ -91,7 +91,7 @@ CODEX_ADVISOR_CONTEXT_DIFF_CHARS=20000
 
 The `CODEX_ADVISOR_CONTEXT_*` variables tune the bounded repository context collected for `--with-context` runs: the number of ripgrep search terms, the file-tree line cap, and the character budget for the gathered `git diff`. Non-numeric values fall back to the defaults shown above.
 
-`CODEX_ADVISOR_EFFORT` sets the Codex reasoning effort. Accepted values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` (default `low`). An unrecognized value fails fast rather than being passed through.
+`CODEX_ADVISOR_EFFORT` sets the Codex reasoning effort. Accepted values: `low`, `medium`, `high`, `xhigh` (default `low`) — the levels advertised by the default models (gpt-5.5 / gpt-5.4-mini). The authoritative set is per-model (`model/list` → `supportedReasoningEfforts`); an unrecognized value fails fast rather than being passed through.
 
 The Codex turn is started with `approvalPolicy: "never"` and a read-only sandbox policy so the refinement pass cannot request interactive approvals or make changes.
 
