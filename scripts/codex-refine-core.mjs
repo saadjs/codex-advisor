@@ -160,6 +160,7 @@ export function parseArgs(argv) {
     withContext: false,
     model: null,
     effort: null,
+    out: null,
   };
   const rest = [];
 
@@ -178,6 +179,9 @@ export function parseArgs(argv) {
       i += 1;
     } else if (arg === "--effort") {
       args.effort = argv[i + 1] ?? "";
+      i += 1;
+    } else if (arg === "--out") {
+      args.out = argv[i + 1] ?? "";
       i += 1;
     } else if (arg.startsWith("--hook-output=")) {
       args.hookOutput = arg.slice("--hook-output=".length);

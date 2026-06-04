@@ -93,6 +93,8 @@ The `CODEX_ADVISOR_CONTEXT_*` variables tune the bounded repository context coll
 
 `CODEX_ADVISOR_EFFORT` sets the Codex reasoning effort. Accepted values: `low`, `medium`, `high`, `xhigh` (default `low`) — the levels advertised by the default models (gpt-5.5 / gpt-5.4-mini). The authoritative set is per-model (`model/list` → `supportedReasoningEfforts`); an unrecognized value fails fast rather than being passed through.
 
+The bridge also accepts per-invocation flags: `--model <name>` and `--effort <level>` override the model and reasoning effort for a single run, and `--out <file>` writes the refined spec to a file in addition to stdout (text mode only).
+
 The Codex turn is started with `approvalPolicy: "never"` and a read-only sandbox policy so the refinement pass cannot request interactive approvals or make changes.
 
 ## Development

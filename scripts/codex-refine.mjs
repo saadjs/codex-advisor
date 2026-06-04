@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { writeFile } from "node:fs/promises";
+
 import {
   extractPromptFromHookInput,
   formatHookOutput,
@@ -38,7 +40,11 @@ async function main() {
     model: args.model ?? undefined,
     effort: args.effort ?? undefined,
   });
-  process.stdout.write(`${refinedSpec.trim()}\n`);
+  const spec = `${refinedSpec.trim()}\n`;
+  if (args.out) {
+    await writeFile(args.out, spec);
+  }
+  process.stdout.write(spec);
 }
 
 main().catch((error) => {

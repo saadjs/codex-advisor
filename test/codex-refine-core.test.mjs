@@ -95,6 +95,7 @@ test("parseArgs supports hook output format options", () => {
     withContext: false,
     model: null,
     effort: null,
+    out: null,
   });
   assert.deepEqual(parseArgs(["--text", "fix the test"]), {
     hookOutput: "standard",
@@ -103,6 +104,7 @@ test("parseArgs supports hook output format options", () => {
     withContext: false,
     model: null,
     effort: null,
+    out: null,
   });
 });
 
@@ -114,6 +116,7 @@ test("parseArgs supports context-aware text mode", () => {
     withContext: true,
     model: null,
     effort: null,
+    out: null,
   });
 });
 
@@ -125,6 +128,19 @@ test("parseArgs supports --model and --effort overrides", () => {
     withContext: false,
     model: "gpt-x",
     effort: "high",
+    out: null,
+  });
+});
+
+test("parseArgs supports --out for persisting the refined spec", () => {
+  assert.deepEqual(parseArgs(["--out", "spec.md", "--text", "hi"]), {
+    hookOutput: "standard",
+    mode: "text",
+    text: "hi",
+    withContext: false,
+    model: null,
+    effort: null,
+    out: "spec.md",
   });
 });
 
