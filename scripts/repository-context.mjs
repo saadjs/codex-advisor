@@ -53,12 +53,13 @@ const SEARCH_STOP_WORDS = new Set([
 ]);
 
 // Resolve an integer budget from an explicit option, then an env override,
-// falling back to the constant. Non-numeric candidates are skipped, not honored.
-export function intOption(option, envValue, fallback) {
+// falling back to the constant. Invalid and below-minimum candidates are skipped.
+export function intOption(option, envValue, fallback, { min = 0 } = {}) {
   for (const candidate of [option, envValue]) {
-    if (candidate == null || candidate === "") continue;
-    const parsed = Number.parseInt(candidate, 10);
-    if (!Number.isNaN(parsed)) return parsed;
+    const raw = typeof candidate === "string" ? candidate.trim() : candidate;
+    if (raw == null || raw === "") continue;
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= min) return parsed;
   }
   return fallback;
 }
@@ -70,12 +71,20 @@ export function truncateText(text, maxChars) {
 }
 
 export function limitLines(text, maxLines) {
+  const parsedLimit = Number(maxLines);
+  const limit = Number.isInteger(parsedLimit) ? Math.max(0, parsedLimit) : DEFAULT_CONTEXT_FILE_TREE_LINES;
   const lines = String(text ?? "").split("\n");
-  if (lines.length <= maxLines) return lines.join("\n");
-  return `${lines.slice(0, maxLines).join("\n")}\n[truncated ${lines.length - maxLines} lines]`;
+  if (lines.length <= limit) return lines.join("\n");
+  const kept = lines.slice(0, limit).join("\n");
+  const truncated = `[truncated ${lines.length - limit} lines]`;
+  return kept ? `${kept}\n${truncated}` : truncated;
 }
 
 export function deriveSearchTerms(userPrompt, { maxTerms = DEFAULT_CONTEXT_SEARCH_TERMS } = {}) {
+  const parsedLimit = Number(maxTerms);
+  const limit = Number.isInteger(parsedLimit) ? Math.max(0, parsedLimit) : DEFAULT_CONTEXT_SEARCH_TERMS;
+  if (limit === 0) return [];
+
   const seen = new Set();
   const terms = [];
   const candidates = userPrompt.match(/[A-Za-z0-9][A-Za-z0-9_./:-]{2,}/g) ?? [];
@@ -91,7 +100,7 @@ export function deriveSearchTerms(userPrompt, { maxTerms = DEFAULT_CONTEXT_SEARC
     seen.add(key);
     terms.push(term);
 
-    if (terms.length >= maxTerms) {
+    if (terms.length >= limit) {
       break;
     }
   }

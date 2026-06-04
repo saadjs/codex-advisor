@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
+  deriveSearchTerms,
   gatherRepositoryContext,
   intOption,
+  limitLines,
   runProcessCapture,
 } from "../scripts/repository-context.mjs";
 
@@ -74,6 +76,16 @@ test("intOption prefers option, then env, then the fallback, skipping non-numeri
   assert.equal(intOption(null, "", 8), 8);
   assert.equal(intOption(null, "abc", 8), 8);
   assert.equal(intOption("nope", null, 8), 8);
+  assert.equal(intOption("-1", null, 8), 8);
+  assert.equal(intOption("3abc", null, 8), 8);
+  assert.equal(intOption("0", null, 8), 0);
+});
+
+test("search and line budgets handle zero and negative bounds explicitly", () => {
+  assert.deepEqual(deriveSearchTerms("alpha bravo charlie", { maxTerms: 0 }), []);
+  assert.deepEqual(deriveSearchTerms("alpha bravo charlie", { maxTerms: -1 }), []);
+  assert.equal(limitLines("one\ntwo\nthree", 0), "[truncated 3 lines]");
+  assert.equal(limitLines("one\ntwo\nthree", -1), "[truncated 3 lines]");
 });
 
 test("gatherRepositoryContext honors CODEX_ADVISOR_CONTEXT_* env budgets", async () => {

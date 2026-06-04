@@ -6,6 +6,7 @@ import {
   buildRefinementInstruction,
   DEFAULT_CONTEXT_MODEL,
   DEFAULT_MODEL,
+  formatPartialRefinementError,
   formatHookOutput,
   normalizeEffort,
   parseArgs,
@@ -145,6 +146,22 @@ test("parseArgs supports --out for persisting the refined spec", () => {
     effort: null,
     out: "spec.md",
   });
+});
+
+test("parseArgs rejects missing values before consuming the next flag", () => {
+  for (const flag of ["--text", "--model", "--effort", "--out", "--hook-output"]) {
+    assert.throws(() => parseArgs([flag]), new RegExp(`Missing value for ${flag}`));
+    assert.throws(() => parseArgs([flag, "--with-context", "hi"]), new RegExp(`Missing value for ${flag}`));
+  }
+});
+
+test("formatPartialRefinementError emits a safe structured partial spec", () => {
+  const error = new PartialRefinementError("timeout", "Goal: partial\nScope: incomplete");
+  const output = formatPartialRefinementError(error);
+
+  assert.match(output, /incomplete; do not implement/);
+  assert.match(output, /"Goal: partial\\nScope: incomplete"/);
+  assert.match(output, /CODEX_ADVISOR_TIMEOUT_MS/);
 });
 
 test("buildAuthoritativeContext frames the refined spec as primary", () => {

@@ -21,6 +21,16 @@ export class PartialRefinementError extends Error {
   }
 }
 
+export function formatPartialRefinementError(error) {
+  const partialSpec = typeof error?.partialSpec === "string" ? error.partialSpec.trim() : "";
+  const lines = [
+    "Partial spec before timeout (incomplete; do not implement):",
+    JSON.stringify(partialSpec),
+    "Rerun with a longer CODEX_ADVISOR_TIMEOUT_MS to get a complete spec.",
+  ];
+  return lines.join("\n");
+}
+
 export function normalizeEffort(value, { model = DEFAULT_MODEL } = {}) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`Unsupported effort for ${model}: ${value}. Expected a non-empty string.`);
@@ -179,6 +189,14 @@ export function parseArgs(argv) {
   };
   const rest = [];
 
+  const readFlagValue = (index, flag) => {
+    const value = argv[index + 1];
+    if (value == null || value.startsWith("--")) {
+      throw new Error(`Missing value for ${flag}.`);
+    }
+    return value;
+  };
+
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--hook") {
@@ -187,21 +205,21 @@ export function parseArgs(argv) {
       args.withContext = true;
     } else if (arg === "--text") {
       args.mode = "text";
-      args.text = argv[i + 1] ?? "";
+      args.text = readFlagValue(i, arg);
       i += 1;
     } else if (arg === "--model") {
-      args.model = argv[i + 1] ?? "";
+      args.model = readFlagValue(i, arg);
       i += 1;
     } else if (arg === "--effort") {
-      args.effort = argv[i + 1] ?? "";
+      args.effort = readFlagValue(i, arg);
       i += 1;
     } else if (arg === "--out") {
-      args.out = argv[i + 1] ?? "";
+      args.out = readFlagValue(i, arg);
       i += 1;
     } else if (arg.startsWith("--hook-output=")) {
       args.hookOutput = arg.slice("--hook-output=".length);
     } else if (arg === "--hook-output") {
-      args.hookOutput = argv[i + 1] ?? "standard";
+      args.hookOutput = readFlagValue(i, arg);
       i += 1;
     } else {
       rest.push(arg);
