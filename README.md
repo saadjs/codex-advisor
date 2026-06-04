@@ -84,7 +84,12 @@ CODEX_ADVISOR_TIMEOUT_MS=90000
 CODEX_ADVISOR_MIN_CHARS=40
 CODEX_ADVISOR_DISABLE=1
 CODEX_ADVISOR_CODEX_BIN=codex
+CODEX_ADVISOR_CONTEXT_SEARCH_TERMS=8
+CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES=250
+CODEX_ADVISOR_CONTEXT_DIFF_CHARS=20000
 ```
+
+The `CODEX_ADVISOR_CONTEXT_*` variables tune the bounded repository context collected for `--with-context` runs: the number of ripgrep search terms, the file-tree line cap, and the character budget for the gathered `git diff`. Non-numeric values fall back to the defaults shown above.
 
 `CODEX_ADVISOR_EFFORT` sets the Codex reasoning effort. Accepted values: `none`, `minimal`, `low`, `medium`, `high`, `xhigh` (default `low`). An unrecognized value fails fast rather than being passed through.
 

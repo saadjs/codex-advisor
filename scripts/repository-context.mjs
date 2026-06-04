@@ -52,6 +52,17 @@ const SEARCH_STOP_WORDS = new Set([
   "with",
 ]);
 
+// Resolve an integer budget from an explicit option, then an env override,
+// falling back to the constant. Non-numeric candidates are skipped, not honored.
+export function intOption(option, envValue, fallback) {
+  for (const candidate of [option, envValue]) {
+    if (candidate == null || candidate === "") continue;
+    const parsed = Number.parseInt(candidate, 10);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return fallback;
+}
+
 export function truncateText(text, maxChars) {
   const value = String(text ?? "");
   if (value.length <= maxChars) return value;
@@ -235,6 +246,10 @@ async function searchTerm(run, cwd, term) {
 
 export async function gatherRepositoryContext(userPrompt, options = {}) {
   const cwd = options.cwd ?? process.cwd();
+  const env = options.env ?? process.env;
+  const maxSearchTerms = intOption(options.maxSearchTerms, env.CODEX_ADVISOR_CONTEXT_SEARCH_TERMS, DEFAULT_CONTEXT_SEARCH_TERMS);
+  const fileTreeLines = intOption(options.fileTreeLines, env.CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES, DEFAULT_CONTEXT_FILE_TREE_LINES);
+  const diffChars = intOption(options.diffChars, env.CODEX_ADVISOR_CONTEXT_DIFF_CHARS, DEFAULT_CONTEXT_DIFF_CHARS);
   const spawnCommand = options.spawnCommand ?? spawn;
   const runCommand = options.runCommand ?? ((command, args, runOptions) => runProcessCapture(command, args, {
     ...runOptions,
@@ -251,7 +266,7 @@ export async function gatherRepositoryContext(userPrompt, options = {}) {
   const contextCwd = repoRoot || cwd;
 
   const searchTerms = deriveSearchTerms(userPrompt, {
-    maxTerms: options.maxSearchTerms ?? DEFAULT_CONTEXT_SEARCH_TERMS,
+    maxTerms: maxSearchTerms,
   });
 
   // Every probe below is independent once the repo root is known, so run them
@@ -260,7 +275,7 @@ export async function gatherRepositoryContext(userPrompt, options = {}) {
     run("git", ["status", "--short"], { cwd: contextCwd, maxChars: 4000 }),
     // Diff against HEAD so staged edits are included, not just unstaged ones.
     run("git", ["diff", "HEAD", "--stat"], { cwd: contextCwd, maxChars: 4000 }),
-    run("git", ["diff", "HEAD", "--"], { cwd: contextCwd, maxChars: DEFAULT_CONTEXT_DIFF_CHARS }),
+    run("git", ["diff", "HEAD", "--"], { cwd: contextCwd, maxChars: diffChars }),
     gatherFileTree(run, contextCwd),
     Promise.all(searchTerms.map((term) => searchTerm(run, contextCwd, term))),
   ]);

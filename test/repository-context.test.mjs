@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
   gatherRepositoryContext,
+  intOption,
   runProcessCapture,
 } from "../scripts/repository-context.mjs";
 
@@ -65,6 +66,39 @@ test("gatherRepositoryContext falls back to git ls-files when ripgrep is unavail
 
   assert.equal(context.fileTreeSource, "git ls-files");
   assert.match(context.fileTree, /package\.json/);
+});
+
+test("intOption prefers option, then env, then the fallback, skipping non-numeric values", () => {
+  assert.equal(intOption("3", "5", 8), 3);
+  assert.equal(intOption(null, "5", 8), 5);
+  assert.equal(intOption(null, "", 8), 8);
+  assert.equal(intOption(null, "abc", 8), 8);
+  assert.equal(intOption("nope", null, 8), 8);
+});
+
+test("gatherRepositoryContext honors CODEX_ADVISOR_CONTEXT_* env budgets", async () => {
+  let diffMaxChars = null;
+  const runCommand = async (command, args, options = {}) => {
+    const joined = `${command} ${args.join(" ")}`;
+    if (joined === "git rev-parse --show-toplevel") return { code: 0, stderr: "", stdout: "/repo\n" };
+    if (joined === "git diff HEAD --") {
+      diffMaxChars = options.maxChars;
+      return { code: 0, stderr: "", stdout: "diff --git a/x b/x\n" };
+    }
+    return { code: 1, stderr: "", stdout: "" };
+  };
+
+  const context = await gatherRepositoryContext("alpha bravo charlie delta echo foxtrot", {
+    cwd: "/repo",
+    runCommand,
+    env: {
+      CODEX_ADVISOR_CONTEXT_SEARCH_TERMS: "2",
+      CODEX_ADVISOR_CONTEXT_DIFF_CHARS: "100",
+    },
+  });
+
+  assert.equal(context.searchTerms.length, 2);
+  assert.equal(diffMaxChars, 100);
 });
 
 test("runProcessCapture caps output at maxChars and reports the true overflow once", async () => {

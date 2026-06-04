@@ -237,6 +237,7 @@ export async function runCodexRefinement(userPrompt, options = {}) {
   const repositoryContext = withContext
     ? options.repositoryContext ?? await gatherRepositoryContext(userPrompt, {
       cwd,
+      env,
       runCommand: options.runCommand,
       spawnCommand: options.spawnCommand,
     })
