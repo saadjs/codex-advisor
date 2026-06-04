@@ -117,59 +117,75 @@ const CONTEXT_AWARE_BLOCKS = [
   ].join("\n"),
 ];
 
+const VALID_REFINEMENT_MODES = new Set(["text", "context", "revise"]);
+
+function assertKnownRefinementMode(mode) {
+  if (!VALID_REFINEMENT_MODES.has(mode)) {
+    throw new Error(`Unsupported refinement mode: ${mode}`);
+  }
+}
+
+function normalizeOptionalBlockText(value) {
+  return String(value ?? "").trim();
+}
+
+function requireBlockText(value, errorMessage) {
+  const text = normalizeOptionalBlockText(value);
+  if (!text) {
+    throw new Error(errorMessage);
+  }
+  return text;
+}
+
+function formatInstructionBlock(tag, value) {
+  return [
+    `<${tag}>`,
+    value,
+    `</${tag}>`,
+  ].join("\n");
+}
+
+function formatContextText(repositoryContext) {
+  if (repositoryContext == null) return null;
+  return typeof repositoryContext === "string"
+    ? repositoryContext
+    : formatRepositoryContext(repositoryContext);
+}
+
 export function buildRefinementInstruction(userPrompt, {
+  mode = null,
   repositoryContext = null,
   priorSpec = null,
   claudeFindings = null,
   revisionNotes = null,
 } = {}) {
-  const contextText = repositoryContext == null
-    ? null
-    : typeof repositoryContext === "string"
-      ? repositoryContext
-      : formatRepositoryContext(repositoryContext);
-
-  const isRevise = priorSpec != null;
-  const baseBlocks = isRevise
-    ? REVISE_BLOCKS
-    : contextText == null ? SELF_DIRECTED_BLOCKS : CONTEXT_AWARE_BLOCKS;
-  const blocks = [...baseBlocks];
-
-  if (contextText != null) {
-    blocks.push([
-      "<repository_context>",
-      contextText.trim(),
-      "</repository_context>",
-    ].join("\n"));
+  const resolvedMode = mode ?? (repositoryContext == null ? "text" : "context");
+  assertKnownRefinementMode(resolvedMode);
+  const hasReviseInput = [priorSpec, claudeFindings, revisionNotes].some((value) => normalizeOptionalBlockText(value));
+  if (resolvedMode !== "revise" && hasReviseInput) {
+    throw new Error('Revise fields require mode: "revise".');
   }
 
-  if (isRevise) {
-    blocks.push([
-      "<prior_spec>",
-      priorSpec.trim(),
-      "</prior_spec>",
-    ].join("\n"));
+  const blocks = resolvedMode === "revise"
+    ? [...REVISE_BLOCKS]
+    : resolvedMode === "context" ? [...CONTEXT_AWARE_BLOCKS] : [...SELF_DIRECTED_BLOCKS];
 
-    blocks.push([
-      "<claude_findings>",
-      (claudeFindings ?? "").trim() || "(no findings reported)",
-      "</claude_findings>",
-    ].join("\n"));
+  if (resolvedMode === "context") {
+    const contextText = requireBlockText(formatContextText(repositoryContext), "Context mode requires repositoryContext.");
+    blocks.push(formatInstructionBlock("repository_context", contextText));
+  }
 
-    if ((revisionNotes ?? "").trim()) {
-      blocks.push([
-        "<revision_notes>",
-        revisionNotes.trim(),
-        "</revision_notes>",
-      ].join("\n"));
+  if (resolvedMode === "revise") {
+    blocks.push(formatInstructionBlock("prior_spec", requireBlockText(priorSpec, "Revise mode requires priorSpec.")));
+    blocks.push(formatInstructionBlock("claude_findings", requireBlockText(claudeFindings, "Revise mode requires claudeFindings.")));
+
+    const notesText = normalizeOptionalBlockText(revisionNotes);
+    if (notesText) {
+      blocks.push(formatInstructionBlock("revision_notes", notesText));
     }
   }
 
-  blocks.push([
-    "<user_request>",
-    userPrompt.trim(),
-    "</user_request>",
-  ].join("\n"));
+  blocks.push(formatInstructionBlock("user_request", userPrompt.trim()));
 
   return blocks.join("\n\n");
 }
@@ -235,16 +251,27 @@ export function parseArgs(argv) {
     withContext: false,
   };
   const rest = [];
+  let sawRevise = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--hook") {
+      if (sawRevise) {
+        throw new Error("--hook cannot be combined with --revise.");
+      }
       args.mode = "hook";
     } else if (arg === "--with-context") {
       args.withContext = true;
     } else if (arg === "--revise") {
+      if (args.mode !== "text") {
+        throw new Error("--revise cannot be combined with --hook or --text.");
+      }
+      sawRevise = true;
       args.mode = "revise";
     } else if (arg === "--text") {
+      if (sawRevise) {
+        throw new Error("--text cannot be combined with --revise.");
+      }
       args.mode = "text";
       args.text = argv[i + 1] ?? "";
       i += 1;
@@ -258,8 +285,19 @@ export function parseArgs(argv) {
     }
   }
 
+  if (sawRevise && args.text !== null) {
+    throw new Error("--text cannot be combined with --revise.");
+  }
+
   if (args.text === null && rest.length > 0) {
+    if (sawRevise) {
+      throw new Error("Free-form argv text cannot be combined with --revise.");
+    }
     args.text = rest.join(" ");
+  }
+
+  if (sawRevise && args.withContext) {
+    throw new Error("--with-context cannot be combined with --revise.");
   }
 
   if (!["standard", "legacy", "both"].includes(args.hookOutput)) {
@@ -296,13 +334,14 @@ export async function readAll(stream) {
 export async function runCodexRefinement(userPrompt, options = {}) {
   const env = options.env ?? process.env;
   const withContext = options.withContext ?? false;
+  const mode = options.mode ?? (withContext ? "context" : "text");
+  assertKnownRefinementMode(mode);
   const priorSpec = options.priorSpec ?? null;
   const claudeFindings = options.claudeFindings ?? null;
   const revisionNotes = options.revisionNotes ?? null;
-  const isRevise = priorSpec != null;
-  const model = options.model ?? (isRevise
+  const model = options.model ?? (mode === "revise"
     ? env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL
-    : withContext
+    : mode === "context"
       ? env.CODEX_ADVISOR_CONTEXT_MODEL ?? env.CODEX_ADVISOR_MODEL ?? DEFAULT_CONTEXT_MODEL
       : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
   const timeoutMs = options.timeoutMs ?? Number.parseInt(env.CODEX_ADVISOR_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`, 10);
@@ -311,7 +350,7 @@ export async function runCodexRefinement(userPrompt, options = {}) {
   const codexBin = options.codexBin ?? env.CODEX_ADVISOR_CODEX_BIN ?? "codex";
   const spawnCodex = options.spawnCodex ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
 
-  const repositoryContext = withContext
+  const repositoryContext = mode === "context"
     ? options.repositoryContext ?? await gatherRepositoryContext(userPrompt, {
       cwd,
       runCommand: options.runCommand,
@@ -324,6 +363,7 @@ export async function runCodexRefinement(userPrompt, options = {}) {
     cwd,
     effort,
     instruction: buildRefinementInstruction(userPrompt, {
+      mode,
       repositoryContext,
       priorSpec,
       claudeFindings,

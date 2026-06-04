@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
@@ -13,6 +14,76 @@ import {
   runCodexRefinement,
   shouldSkipHook,
 } from "../scripts/codex-refine-core.mjs";
+
+function createFakeAppServer() {
+  const writes = [];
+  const child = {
+    killed: false,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill() {
+      this.killed = true;
+    },
+    once(event, handler) {
+      this[`on_${event}`] = handler;
+      return this;
+    },
+  };
+
+  child.stdin.on("data", (chunk) => {
+    for (const line of String(chunk).trim().split("\n")) {
+      if (line) writes.push(JSON.parse(line));
+    }
+  });
+
+  return {
+    child,
+    writes,
+    spawnCodex: () => child,
+    async startThread() {
+      await new Promise((resolve) => setImmediate(resolve));
+      child.stdout.write(`${JSON.stringify({ id: 0, result: {} })}\n`);
+      child.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+    },
+    async completeTurn(text) {
+      await new Promise((resolve) => setImmediate(resolve));
+      child.stdout.write(`${JSON.stringify({
+        method: "item/completed",
+        params: {
+          item: {
+            phase: "final_answer",
+            text,
+            type: "agentMessage",
+          },
+        },
+      })}\n`);
+      child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+    },
+  };
+}
+
+function runCli(args, stdin) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["scripts/codex-refine.mjs", ...args], {
+      cwd: process.cwd(),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      resolve({ code, signal, stdout, stderr });
+    });
+    child.stdin.end(stdin);
+  });
+}
 
 test("uses gpt-5.5 as the default Codex model", () => {
   assert.equal(DEFAULT_MODEL, "gpt-5.5");
@@ -59,6 +130,7 @@ test("buildRefinementInstruction with repositoryContext resolves assumptions fro
 
 test("buildRefinementInstruction in revise mode folds in prior spec, findings, and notes", () => {
   const instruction = buildRefinementInstruction("fix upload retries", {
+    mode: "revise",
     priorSpec: "Goal: add retries to uploadWithRetries().",
     claudeFindings: "uploadWithRetries lives in src/uploader.js, not src/upload.js.",
     revisionNotes: "Cap retries at 3 attempts.",
@@ -80,6 +152,7 @@ test("buildRefinementInstruction in revise mode folds in prior spec, findings, a
 
 test("buildRefinementInstruction in revise mode omits the notes block when notes are empty", () => {
   const instruction = buildRefinementInstruction("fix upload retries", {
+    mode: "revise",
     priorSpec: "Goal: add retries.",
     claudeFindings: "Confirmed src/uploader.js.",
     revisionNotes: "",
@@ -88,6 +161,25 @@ test("buildRefinementInstruction in revise mode omits the notes block when notes
   assert.match(instruction, /<prior_spec>/);
   assert.match(instruction, /<claude_findings>/);
   assert.doesNotMatch(instruction, /<revision_notes>/);
+});
+
+test("buildRefinementInstruction requires explicit revise mode and findings", () => {
+  assert.throws(
+    () => buildRefinementInstruction("fix upload retries", {
+      priorSpec: "Goal: add retries.",
+      claudeFindings: "Confirmed src/uploader.js.",
+    }),
+    /Revise fields require mode: "revise"/,
+  );
+
+  assert.throws(
+    () => buildRefinementInstruction("fix upload retries", {
+      mode: "revise",
+      priorSpec: "Goal: add retries.",
+      claudeFindings: "",
+    }),
+    /Revise mode requires claudeFindings/,
+  );
 });
 
 test("formatHookOutput uses current Claude Code systemMessage output by default", () => {
@@ -146,6 +238,13 @@ test("parseArgs supports revise mode", () => {
   });
 });
 
+test("parseArgs rejects revise mode combined with other input modes", () => {
+  assert.throws(() => parseArgs(["--revise", "--with-context"]), /--with-context cannot be combined with --revise/);
+  assert.throws(() => parseArgs(["--revise", "--hook"]), /--hook cannot be combined with --revise/);
+  assert.throws(() => parseArgs(["--revise", "--text", "fix the test"]), /--text cannot be combined with --revise/);
+  assert.throws(() => parseArgs(["--revise", "fix the test"]), /Free-form argv text cannot be combined with --revise/);
+});
+
 test("parseRevisePayload splits delimited sections and tolerates missing notes", () => {
   const payload = [
     "<<<REQUEST>>>",
@@ -182,6 +281,19 @@ test("parseRevisePayload splits delimited sections and tolerates missing notes",
   });
 });
 
+test("revise CLI rejects payloads without findings before calling Codex", async () => {
+  const result = await runCli(["--revise"], [
+    "<<<REQUEST>>>",
+    "fix upload retries",
+    "<<<PRIOR_SPEC>>>",
+    "Goal: add retries.",
+  ].join("\n"));
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Revise payload is missing a <<<FINDINGS>>> section/);
+  assert.equal(result.stdout, "");
+});
+
 test("buildAuthoritativeContext frames the refined spec as primary", () => {
   const context = buildAuthoritativeContext("Goal: Fix the failing test.");
 
@@ -191,55 +303,24 @@ test("buildAuthoritativeContext frames the refined spec as primary", () => {
 });
 
 test("runAppServerTurn sends safe app-server turn parameters and returns final agent text", async () => {
-  const writes = [];
-  const fakeChild = {
-    killed: false,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    kill() {
-      this.killed = true;
-    },
-    once(event, handler) {
-      this[`on_${event}`] = handler;
-      return this;
-    },
-  };
-  fakeChild.stdin.on("data", (chunk) => {
-    for (const line of String(chunk).trim().split("\n")) {
-      if (line) writes.push(JSON.parse(line));
-    }
-  });
+  const fakeServer = createFakeAppServer();
 
   const resultPromise = runAppServerTurn({
     codexBin: "codex",
     cwd: "/tmp/project",
     instruction: "Rewrite this",
     model: "gpt-test",
-    spawnCodex: () => fakeChild,
+    spawnCodex: fakeServer.spawnCodex,
     timeoutMs: 1000,
   });
 
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({ id: 0, result: {} })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({
-    method: "item/completed",
-    params: {
-      item: {
-        phase: "final_answer",
-        text: "Goal: Rewrite the request.",
-        type: "agentMessage",
-      },
-    },
-  })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+  await fakeServer.startThread();
+  await fakeServer.completeTurn("Goal: Rewrite the request.");
 
   assert.equal(await resultPromise, "Goal: Rewrite the request.");
 
-  const threadStart = writes.find((message) => message.method === "thread/start");
-  const turnStart = writes.find((message) => message.method === "turn/start");
+  const threadStart = fakeServer.writes.find((message) => message.method === "thread/start");
+  const turnStart = fakeServer.writes.find((message) => message.method === "turn/start");
   assert.equal(threadStart.params.approvalPolicy, "never");
   assert.equal(threadStart.params.sandbox, "read-only");
   assert.equal(turnStart.params.approvalPolicy, "never");
@@ -248,29 +329,11 @@ test("runAppServerTurn sends safe app-server turn parameters and returns final a
 });
 
 test("runCodexRefinement with context sends context-aware instruction with the mini model by default", async () => {
-  const writes = [];
-  const fakeChild = {
-    killed: false,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    kill() {
-      this.killed = true;
-    },
-    once(event, handler) {
-      this[`on_${event}`] = handler;
-      return this;
-    },
-  };
-  fakeChild.stdin.on("data", (chunk) => {
-    for (const line of String(chunk).trim().split("\n")) {
-      if (line) writes.push(JSON.parse(line));
-    }
-  });
+  const fakeServer = createFakeAppServer();
 
   const resultPromise = runCodexRefinement("fix upload retries", {
     cwd: "/repo",
-    withContext: true,
+    mode: "context",
     repositoryContext: [
       "# Repository Context",
       "## Current Git Diff (`git diff --`)",
@@ -278,83 +341,40 @@ test("runCodexRefinement with context sends context-aware instruction with the m
       "## Relevant Ripgrep Searches",
       "src/upload.js:10:function uploadWithRetries() {}",
     ].join("\n"),
-    spawnCodex: () => fakeChild,
+    spawnCodex: fakeServer.spawnCodex,
     timeoutMs: 1000,
   });
 
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({ id: 0, result: {} })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({
-    method: "item/completed",
-    params: {
-      item: {
-        phase: "final_answer",
-        text: "Goal: Rewrite the request with context.",
-        type: "agentMessage",
-      },
-    },
-  })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+  await fakeServer.startThread();
+  await fakeServer.completeTurn("Goal: Rewrite the request with context.");
 
   assert.equal(await resultPromise, "Goal: Rewrite the request with context.");
 
-  const turnStart = writes.find((message) => message.method === "turn/start");
+  const turnStart = fakeServer.writes.find((message) => message.method === "turn/start");
   assert.equal(turnStart.params.model, "gpt-5.4-mini");
   assert.match(turnStart.params.input[0].text, /Turn ASSUMPTIONs into concrete, correct references/);
   assert.match(turnStart.params.input[0].text, /src\/upload\.js/);
 });
 
 test("runCodexRefinement in revise mode sends the revise instruction with the flagship model", async () => {
-  const writes = [];
-  const fakeChild = {
-    killed: false,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    kill() {
-      this.killed = true;
-    },
-    once(event, handler) {
-      this[`on_${event}`] = handler;
-      return this;
-    },
-  };
-  fakeChild.stdin.on("data", (chunk) => {
-    for (const line of String(chunk).trim().split("\n")) {
-      if (line) writes.push(JSON.parse(line));
-    }
-  });
+  const fakeServer = createFakeAppServer();
 
   const resultPromise = runCodexRefinement("fix upload retries", {
     cwd: "/repo",
+    mode: "revise",
     priorSpec: "Goal: add retries.",
     claudeFindings: "uploadWithRetries lives in src/uploader.js.",
     revisionNotes: "Cap retries at 3.",
-    spawnCodex: () => fakeChild,
+    spawnCodex: fakeServer.spawnCodex,
     timeoutMs: 1000,
   });
 
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({ id: 0, result: {} })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({
-    method: "item/completed",
-    params: {
-      item: {
-        phase: "final_answer",
-        text: "Goal: Tightened spec.",
-        type: "agentMessage",
-      },
-    },
-  })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+  await fakeServer.startThread();
+  await fakeServer.completeTurn("Goal: Tightened spec.");
 
   assert.equal(await resultPromise, "Goal: Tightened spec.");
 
-  const turnStart = writes.find((message) => message.method === "turn/start");
+  const turnStart = fakeServer.writes.find((message) => message.method === "turn/start");
   assert.equal(turnStart.params.model, "gpt-5.5");
   assert.match(turnStart.params.input[0].text, /You previously produced a spec/);
   assert.match(turnStart.params.input[0].text, /src\/uploader\.js/);

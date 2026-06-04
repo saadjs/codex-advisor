@@ -35,8 +35,12 @@ async function main() {
     if (!priorSpec.trim()) {
       throw new Error("Revise payload is missing a <<<PRIOR_SPEC>>> section.");
     }
+    if (!findings.trim()) {
+      throw new Error("Revise payload is missing a <<<FINDINGS>>> section.");
+    }
 
     const revisedSpec = await runCodexRefinement(request, {
+      mode: "revise",
       priorSpec,
       claudeFindings: findings,
       revisionNotes,
