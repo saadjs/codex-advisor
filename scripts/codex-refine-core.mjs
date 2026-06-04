@@ -299,6 +299,7 @@ export async function runAppServerTurn({
     // turn that produced text without a final_answer item is not discarded.
     const assembleAnswer = () => finalAnswer.trim() || Array.from(deltaByItemId.values()).join("").trim();
 
+    // Matched settle-once pair: both guard `settled`, run cleanup, then settle.
     const fail = (error) => {
       if (settled) return;
       settled = true;
@@ -306,32 +307,34 @@ export async function runAppServerTurn({
       reject(error);
     };
 
-    const finish = () => {
+    const succeed = (answer) => {
       if (settled) return;
       settled = true;
       cleanup();
+      resolve(answer);
+    };
+
+    const finish = () => {
       const answer = assembleAnswer();
       if (!answer) {
-        reject(new Error(`Codex returned no refined spec.${stderr ? ` stderr: ${stderr.trim()}` : ""}`));
+        fail(new Error(`Codex returned no refined spec.${stderr ? ` stderr: ${stderr.trim()}` : ""}`));
         return;
       }
-      resolve(answer);
+      succeed(answer);
     };
 
     const timer = setTimeout(() => {
       if (settled) return;
       // On timeout, salvage any spec streamed so far instead of failing outright.
       const partial = assembleAnswer();
-      if (partial) {
-        settled = true;
-        cleanup();
-        // Flag that this spec is truncated — callers like refine-and-run would
-        // otherwise auto-execute a partial request with no signal.
-        process.stderr.write(`Codex timed out after ${timeoutMs}ms; returning partial spec (${partial.length} chars).\n`);
-        resolve(partial);
+      if (!partial) {
+        fail(new Error(`Timed out waiting for Codex after ${timeoutMs}ms.`));
         return;
       }
-      fail(new Error(`Timed out waiting for Codex after ${timeoutMs}ms.`));
+      // Flag that this spec is truncated — callers like refine-and-run would
+      // otherwise auto-execute a partial request with no signal.
+      process.stderr.write(`Codex timed out after ${timeoutMs}ms; returning partial spec (${partial.length} chars).\n`);
+      succeed(partial);
     }, timeoutMs);
 
     child.once("error", (error) => {

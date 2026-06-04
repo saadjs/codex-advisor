@@ -23,8 +23,8 @@ async function main() {
     const refinedSpec = await runCodexRefinement(prompt, {
       cwd: input.cwd ?? process.cwd(),
       withContext: args.withContext,
-      model: args.model ?? undefined,
-      effort: args.effort ?? undefined,
+      model: args.model,
+      effort: args.effort,
     });
     process.stdout.write(JSON.stringify(formatHookOutput(refinedSpec, { hookOutput: args.hookOutput })));
     return;
@@ -37,8 +37,8 @@ async function main() {
 
   const refinedSpec = await runCodexRefinement(prompt, {
     withContext: args.withContext,
-    model: args.model ?? undefined,
-    effort: args.effort ?? undefined,
+    model: args.model,
+    effort: args.effort,
   });
   const spec = `${refinedSpec.trim()}\n`;
   // Emit to stdout first so a bad --out path can't discard the just-computed spec.
