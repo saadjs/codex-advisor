@@ -1,12 +1,36 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
+import { formatRepositoryContext, gatherRepositoryContext } from "./repository-context.mjs";
+
 export const DEFAULT_MODEL = "gpt-5.5";
+export const DEFAULT_CONTEXT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_TIMEOUT_MS = 90000;
 export const DEFAULT_MIN_HOOK_CHARS = 40;
 
-export function buildRefinementInstruction(userPrompt) {
-  return [
+const OUTPUT_CONTRACT_BLOCK = [
+  "<structured_output_contract>",
+  "Return only the rewritten spec, with no preamble, explanation, or XML tags.",
+  "Use compact Markdown with these sections in this order:",
+  "1. Goal",
+  "2. Scope",
+  "3. Assumptions",
+  "4. Requirements",
+  "5. Verification",
+  "6. Acceptance Criteria",
+  "Keep each section concise and omit filler.",
+  "</structured_output_contract>",
+].join("\n");
+
+const ACTION_SAFETY_BLOCK = [
+  "<action_safety>",
+  "Keep the spec tightly scoped to the user's request.",
+  "Avoid unrelated refactors, rewrites, migrations, or cleanup unless they are required for correctness.",
+  "</action_safety>",
+].join("\n");
+
+const SELF_DIRECTED_BLOCKS = [
+  [
     "<task>",
     "Rewrite the user's request into a precise, unambiguous spec for a coding agent.",
     "Resolve vague terms, state concrete acceptance criteria, and identify likely files or constraints only when they are provided or strongly inferable.",
@@ -14,42 +38,81 @@ export function buildRefinementInstruction(userPrompt) {
     "Do not ask clarifying questions.",
     "Do not broaden the user's intent.",
     "</task>",
-    "",
-    "<structured_output_contract>",
-    "Return only the rewritten spec, with no preamble, explanation, or XML tags.",
-    "Use compact Markdown with these sections in this order:",
-    "1. Goal",
-    "2. Scope",
-    "3. Assumptions",
-    "4. Requirements",
-    "5. Verification",
-    "6. Acceptance Criteria",
-    "Keep each section concise and omit filler.",
-    "</structured_output_contract>",
-    "",
+  ].join("\n"),
+  OUTPUT_CONTRACT_BLOCK,
+  [
     "<default_follow_through_policy>",
     "Default to the most reasonable low-risk interpretation.",
     "Only encode uncertainty as an ASSUMPTION when resolving it changes correctness, scope, safety, or verification.",
     "</default_follow_through_policy>",
-    "",
+  ].join("\n"),
+  [
     "<missing_context_gating>",
     "Do not invent repository facts, file paths, APIs, test commands, or product behavior.",
     "If context is missing, describe the needed context as an ASSUMPTION instead of presenting it as fact.",
     "</missing_context_gating>",
-    "",
-    "<action_safety>",
-    "Keep the spec tightly scoped to the user's request.",
-    "Avoid unrelated refactors, rewrites, migrations, or cleanup unless they are required for correctness.",
-    "</action_safety>",
-    "",
+  ].join("\n"),
+  ACTION_SAFETY_BLOCK,
+  [
     "<verification_loop>",
     "Before finalizing, check that the spec is actionable, testable, and does not contain unsupported certainty.",
     "</verification_loop>",
-    "",
+  ].join("\n"),
+];
+
+const CONTEXT_AWARE_BLOCKS = [
+  [
+    "<task>",
+    "Rewrite the user's request into a precise, unambiguous spec for a coding agent.",
+    "Use the repository context below as evidence. It includes the file tree, current git diff, git status, and ripgrep results for relevant terms.",
+    "Turn ASSUMPTIONs into concrete, correct references when the context supports them.",
+    "Replace speculative file paths, APIs, commands, tests, and product behavior with actual paths, symbols, diff references, and commands found in context.",
+    "Leave an ASSUMPTION only when the repository context cannot resolve a fact that changes correctness, scope, safety, or verification.",
+    "Do not ask clarifying questions.",
+    "Do not broaden the user's intent.",
+    "</task>",
+  ].join("\n"),
+  OUTPUT_CONTRACT_BLOCK,
+  [
+    "<context_resolution_policy>",
+    "Treat repository context as authoritative for repo facts.",
+    "Mention concrete paths, symbols, commands, and tests only when they are present in context.",
+    "If current git diff changes the likely implementation path, reflect that explicitly.",
+    "If ripgrep results are inconclusive, say what remains an ASSUMPTION instead of inventing missing references.",
+    "</context_resolution_policy>",
+  ].join("\n"),
+  ACTION_SAFETY_BLOCK,
+  [
+    "<verification_loop>",
+    "Before finalizing, check that every repo-specific claim is supported by the supplied context or marked as an ASSUMPTION.",
+    "</verification_loop>",
+  ].join("\n"),
+];
+
+export function buildRefinementInstruction(userPrompt, { repositoryContext = null } = {}) {
+  const contextText = repositoryContext == null
+    ? null
+    : typeof repositoryContext === "string"
+      ? repositoryContext
+      : formatRepositoryContext(repositoryContext);
+
+  const blocks = [...(contextText == null ? SELF_DIRECTED_BLOCKS : CONTEXT_AWARE_BLOCKS)];
+
+  if (contextText != null) {
+    blocks.push([
+      "<repository_context>",
+      contextText.trim(),
+      "</repository_context>",
+    ].join("\n"));
+  }
+
+  blocks.push([
     "<user_request>",
     userPrompt.trim(),
     "</user_request>",
-  ].join("\n");
+  ].join("\n"));
+
+  return blocks.join("\n\n");
 }
 
 export function buildAuthoritativeContext(refinedSpec) {
@@ -84,6 +147,7 @@ export function parseArgs(argv) {
     mode: "text",
     hookOutput: "standard",
     text: null,
+    withContext: false,
   };
   const rest = [];
 
@@ -91,6 +155,8 @@ export function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--hook") {
       args.mode = "hook";
+    } else if (arg === "--with-context") {
+      args.withContext = true;
     } else if (arg === "--text") {
       args.mode = "text";
       args.text = argv[i + 1] ?? "";
@@ -142,18 +208,29 @@ export async function readAll(stream) {
 
 export async function runCodexRefinement(userPrompt, options = {}) {
   const env = options.env ?? process.env;
-  const model = options.model ?? env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL;
+  const withContext = options.withContext ?? false;
+  const model = options.model ?? (withContext
+    ? env.CODEX_ADVISOR_CONTEXT_MODEL ?? env.CODEX_ADVISOR_MODEL ?? DEFAULT_CONTEXT_MODEL
+    : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
   const timeoutMs = options.timeoutMs ?? Number.parseInt(env.CODEX_ADVISOR_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`, 10);
   const cwd = options.cwd ?? process.cwd();
   const effort = options.effort ?? env.CODEX_ADVISOR_EFFORT ?? "low";
   const codexBin = options.codexBin ?? env.CODEX_ADVISOR_CODEX_BIN ?? "codex";
   const spawnCodex = options.spawnCodex ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
 
+  const repositoryContext = withContext
+    ? options.repositoryContext ?? await gatherRepositoryContext(userPrompt, {
+      cwd,
+      runCommand: options.runCommand,
+      spawnCommand: options.spawnCommand,
+    })
+    : null;
+
   return runAppServerTurn({
     codexBin,
     cwd,
     effort,
-    instruction: buildRefinementInstruction(userPrompt),
+    instruction: buildRefinementInstruction(userPrompt, { repositoryContext }),
     model,
     spawnCodex,
     timeoutMs,

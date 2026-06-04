@@ -20,6 +20,7 @@ async function main() {
 
     const refinedSpec = await runCodexRefinement(prompt, {
       cwd: input.cwd ?? process.cwd(),
+      withContext: args.withContext,
     });
     process.stdout.write(JSON.stringify(formatHookOutput(refinedSpec, { hookOutput: args.hookOutput })));
     return;
@@ -30,7 +31,7 @@ async function main() {
     throw new Error("Provide a prompt with --text or stdin.");
   }
 
-  const refinedSpec = await runCodexRefinement(prompt);
+  const refinedSpec = await runCodexRefinement(prompt, { withContext: args.withContext });
   process.stdout.write(`${refinedSpec.trim()}\n`);
 }
 
