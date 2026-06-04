@@ -325,6 +325,9 @@ export async function runAppServerTurn({
       if (partial) {
         settled = true;
         cleanup();
+        // Flag that this spec is truncated — callers like refine-and-run would
+        // otherwise auto-execute a partial request with no signal.
+        process.stderr.write(`Codex timed out after ${timeoutMs}ms; returning partial spec (${partial.length} chars).\n`);
         resolve(partial);
         return;
       }

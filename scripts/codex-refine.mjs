@@ -41,10 +41,11 @@ async function main() {
     effort: args.effort ?? undefined,
   });
   const spec = `${refinedSpec.trim()}\n`;
+  // Emit to stdout first so a bad --out path can't discard the just-computed spec.
+  process.stdout.write(spec);
   if (args.out) {
     await writeFile(args.out, spec);
   }
-  process.stdout.write(spec);
 }
 
 main().catch((error) => {
