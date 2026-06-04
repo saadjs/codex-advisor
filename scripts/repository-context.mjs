@@ -289,7 +289,7 @@ export async function gatherRepositoryContext(userPrompt, options = {}) {
 
   return {
     cwd,
-    fileTree: limitLines(formatCommandOutput(fileTree.result, "(no files found)"), options.fileTreeLines ?? DEFAULT_CONTEXT_FILE_TREE_LINES),
+    fileTree: limitLines(formatCommandOutput(fileTree.result, "(no files found)"), fileTreeLines),
     fileTreeSource: fileTree.source,
     gitDiff: formatCommandOutput(gitDiffResult, "(no current git diff)"),
     gitDiffStat: formatCommandOutput(gitDiffStatResult, "(no current git diff stat)"),

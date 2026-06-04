@@ -81,6 +81,7 @@ test("gatherRepositoryContext honors CODEX_ADVISOR_CONTEXT_* env budgets", async
   const runCommand = async (command, args, options = {}) => {
     const joined = `${command} ${args.join(" ")}`;
     if (joined === "git rev-parse --show-toplevel") return { code: 0, stderr: "", stdout: "/repo\n" };
+    if (command === "rg" && args[0] === "--files") return { code: 0, stderr: "", stdout: "one.js\ntwo.js\nthree.js\n" };
     if (joined === "git diff HEAD --") {
       diffMaxChars = options.maxChars;
       return { code: 0, stderr: "", stdout: "diff --git a/x b/x\n" };
@@ -93,11 +94,13 @@ test("gatherRepositoryContext honors CODEX_ADVISOR_CONTEXT_* env budgets", async
     runCommand,
     env: {
       CODEX_ADVISOR_CONTEXT_SEARCH_TERMS: "2",
+      CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES: "1",
       CODEX_ADVISOR_CONTEXT_DIFF_CHARS: "100",
     },
   });
 
   assert.equal(context.searchTerms.length, 2);
+  assert.equal(context.fileTree, "one.js\n[truncated 2 lines]");
   assert.equal(diffMaxChars, 100);
 });
 
