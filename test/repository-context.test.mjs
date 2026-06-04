@@ -18,10 +18,10 @@ test("gatherRepositoryContext inspects file tree, git diff, and relevant ripgrep
     if (joined === "git status --short") {
       return { code: 0, stderr: "", stdout: " M scripts/codex-refine-core.mjs\n" };
     }
-    if (joined === "git diff --stat") {
+    if (joined === "git diff HEAD --stat") {
       return { code: 0, stderr: "", stdout: " scripts/codex-refine-core.mjs | 10 +++++-----\n" };
     }
-    if (joined === "git diff --") {
+    if (joined === "git diff HEAD --") {
       return { code: 0, stderr: "", stdout: "diff --git a/scripts/codex-refine-core.mjs b/scripts/codex-refine-core.mjs\n" };
     }
     if (command === "rg" && args[0] === "--files") {
@@ -47,7 +47,8 @@ test("gatherRepositoryContext inspects file tree, git diff, and relevant ripgrep
   assert.equal(context.searches.length, 1);
   assert.match(context.searches[0].output, /uploadWithRetries/);
   assert.ok(calls.some((call) => call.command === "rg" && call.args[0] === "--files"));
-  assert.ok(calls.some((call) => call.command === "git" && call.args.join(" ") === "diff --"));
+  // Diff is taken against HEAD so staged edits are captured, not just unstaged.
+  assert.ok(calls.some((call) => call.command === "git" && call.args.join(" ") === "diff HEAD --"));
   assert.ok(calls.some((call) => call.command === "rg" && call.args.includes("upload")));
 });
 

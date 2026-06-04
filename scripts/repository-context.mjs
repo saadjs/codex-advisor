@@ -258,8 +258,9 @@ export async function gatherRepositoryContext(userPrompt, options = {}) {
   // concurrently — each command keeps its own timeout — instead of serializing.
   const [gitStatusResult, gitDiffStatResult, gitDiffResult, fileTree, searchResults] = await Promise.all([
     run("git", ["status", "--short"], { cwd: contextCwd, maxChars: 4000 }),
-    run("git", ["diff", "--stat"], { cwd: contextCwd, maxChars: 4000 }),
-    run("git", ["diff", "--"], { cwd: contextCwd, maxChars: DEFAULT_CONTEXT_DIFF_CHARS }),
+    // Diff against HEAD so staged edits are included, not just unstaged ones.
+    run("git", ["diff", "HEAD", "--stat"], { cwd: contextCwd, maxChars: 4000 }),
+    run("git", ["diff", "HEAD", "--"], { cwd: contextCwd, maxChars: DEFAULT_CONTEXT_DIFF_CHARS }),
     gatherFileTree(run, contextCwd),
     Promise.all(searchTerms.map((term) => searchTerm(run, contextCwd, term))),
   ]);
@@ -310,10 +311,10 @@ export function formatRepositoryContext(context) {
     "## Git Status (`git status --short`)",
     context.gitStatus,
     "",
-    "## Current Git Diff Stat (`git diff --stat`)",
+    "## Current Git Diff Stat (`git diff HEAD --stat`)",
     context.gitDiffStat,
     "",
-    "## Current Git Diff (`git diff --`)",
+    "## Current Git Diff (`git diff HEAD`, staged + unstaged)",
     context.gitDiff,
     "",
     `## File Tree (${context.fileTreeSource})`,
