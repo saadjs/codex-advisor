@@ -280,6 +280,10 @@ export async function runAppServerTurn({
   };
 
   return new Promise((resolve, reject) => {
+    // Prefer the explicit final answer, but fall back to streamed deltas so a
+    // turn that produced text without a final_answer item is not discarded.
+    const assembleAnswer = () => finalAnswer.trim() || Array.from(deltaByItemId.values()).join("").trim();
+
     const fail = (error) => {
       if (settled) return;
       settled = true;
@@ -291,7 +295,7 @@ export async function runAppServerTurn({
       if (settled) return;
       settled = true;
       cleanup();
-      const answer = finalAnswer.trim();
+      const answer = assembleAnswer();
       if (!answer) {
         reject(new Error(`Codex returned no refined spec.${stderr ? ` stderr: ${stderr.trim()}` : ""}`));
         return;
@@ -300,6 +304,15 @@ export async function runAppServerTurn({
     };
 
     const timer = setTimeout(() => {
+      if (settled) return;
+      // On timeout, salvage any spec streamed so far instead of failing outright.
+      const partial = assembleAnswer();
+      if (partial) {
+        settled = true;
+        cleanup();
+        resolve(partial);
+        return;
+      }
       fail(new Error(`Timed out waiting for Codex after ${timeoutMs}ms.`));
     }, timeoutMs);
 
@@ -363,9 +376,6 @@ export async function runAppServerTurn({
 
       if (message.method === "turn/completed") {
         clearTimeout(timer);
-        if (!finalAnswer && deltaByItemId.size > 0) {
-          finalAnswer = Array.from(deltaByItemId.values()).join("");
-        }
         finish();
       }
     });

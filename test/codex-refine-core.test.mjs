@@ -176,6 +176,60 @@ test("runAppServerTurn sends safe app-server turn parameters and returns final a
   assert.deepEqual(turnStart.params.input, [{ type: "text", text: "Rewrite this" }]);
 });
 
+function makeFakeChild() {
+  const child = {
+    killed: false,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill() {
+      this.killed = true;
+    },
+    once(event, handler) {
+      this[`on_${event}`] = handler;
+      return this;
+    },
+  };
+  return child;
+}
+
+test("runAppServerTurn salvages streamed deltas when the turn times out", async () => {
+  const fakeChild = makeFakeChild();
+
+  const resultPromise = runAppServerTurn({
+    cwd: "/tmp/project",
+    instruction: "Rewrite this",
+    spawnCodex: () => fakeChild,
+    timeoutMs: 50,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  // Stream partial deltas, then never send turn/completed so the timer fires.
+  fakeChild.stdout.write(`${JSON.stringify({ method: "agentMessage/delta", params: { itemId: "a", delta: "Goal: " } })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "agentMessage/delta", params: { itemId: "a", delta: "salvage me." } })}\n`);
+
+  assert.equal(await resultPromise, "Goal: salvage me.");
+  assert.equal(fakeChild.killed, true);
+});
+
+test("runAppServerTurn still rejects on timeout when nothing was streamed", async () => {
+  const fakeChild = makeFakeChild();
+
+  const resultPromise = runAppServerTurn({
+    cwd: "/tmp/project",
+    instruction: "Rewrite this",
+    spawnCodex: () => fakeChild,
+    timeoutMs: 50,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+
+  await assert.rejects(resultPromise, /Timed out waiting for Codex after 50ms/);
+});
+
 test("runCodexRefinement with context sends context-aware instruction with the mini model by default", async () => {
   const writes = [];
   const fakeChild = {
