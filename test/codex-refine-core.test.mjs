@@ -7,6 +7,7 @@ import {
   DEFAULT_CONTEXT_MODEL,
   DEFAULT_MODEL,
   formatHookOutput,
+  normalizeEffort,
   parseArgs,
   runAppServerTurn,
   runCodexRefinement,
@@ -19,6 +20,13 @@ test("uses gpt-5.5 as the default Codex model", () => {
 
 test("uses gpt-5.4-mini as the default context-aware Codex model", () => {
   assert.equal(DEFAULT_CONTEXT_MODEL, "gpt-5.4-mini");
+});
+
+test("normalizeEffort accepts valid efforts and rejects unknown ones", () => {
+  assert.equal(normalizeEffort("low"), "low");
+  assert.equal(normalizeEffort("xhigh"), "xhigh");
+  assert.throws(() => normalizeEffort("turbo"), /Unsupported effort: turbo/);
+  assert.throws(() => normalizeEffort(undefined), /Expected one of/);
 });
 
 test("buildRefinementInstruction asks Codex to rewrite instead of clarify", () => {

@@ -7,6 +7,14 @@ export const DEFAULT_MODEL = "gpt-5.5";
 export const DEFAULT_CONTEXT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_TIMEOUT_MS = 90000;
 export const DEFAULT_MIN_HOOK_CHARS = 40;
+export const DEFAULT_EFFORT = "low";
+// Codex app-server ReasoningEffort enum (none < minimal < low < medium < high < xhigh).
+export const VALID_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+
+export function normalizeEffort(value) {
+  if (VALID_EFFORTS.has(value)) return value;
+  throw new Error(`Unsupported effort: ${value}. Expected one of: ${[...VALID_EFFORTS].join(", ")}.`);
+}
 
 const OUTPUT_CONTRACT_BLOCK = [
   "<structured_output_contract>",
@@ -214,7 +222,7 @@ export async function runCodexRefinement(userPrompt, options = {}) {
     : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
   const timeoutMs = options.timeoutMs ?? Number.parseInt(env.CODEX_ADVISOR_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`, 10);
   const cwd = options.cwd ?? process.cwd();
-  const effort = options.effort ?? env.CODEX_ADVISOR_EFFORT ?? "low";
+  const effort = normalizeEffort(options.effort ?? env.CODEX_ADVISOR_EFFORT ?? DEFAULT_EFFORT);
   const codexBin = options.codexBin ?? env.CODEX_ADVISOR_CODEX_BIN ?? "codex";
   const spawnCodex = options.spawnCodex ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
 
