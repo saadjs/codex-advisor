@@ -1,6 +1,6 @@
 {
   "name": "codex-advisor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Refines Claude Code prompts into precise coding-agent specs using Codex app-server.",
   "author": {
     "name": "saadjs"

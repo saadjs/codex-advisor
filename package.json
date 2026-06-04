@@ -1,6 +1,6 @@
 {
   "name": "codex-advisor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Claude Code prompt-refinement plugin backed by Codex app-server.",
   "type": "module",
   "private": true,
