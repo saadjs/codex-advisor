@@ -1,8 +1,12 @@
 #!/usr/bin/env node
+import { writeFile } from "node:fs/promises";
+
 import {
   extractPromptFromHookInput,
+  formatPartialRefinementError,
   formatHookOutput,
   parseArgs,
+  PartialRefinementError,
   readAll,
   runCodexRefinement,
   shouldSkipHook,
@@ -21,6 +25,8 @@ async function main() {
     const refinedSpec = await runCodexRefinement(prompt, {
       cwd: input.cwd ?? process.cwd(),
       withContext: args.withContext,
+      model: args.model,
+      effort: args.effort,
     });
     process.stdout.write(JSON.stringify(formatHookOutput(refinedSpec, { hookOutput: args.hookOutput })));
     return;
@@ -31,11 +37,23 @@ async function main() {
     throw new Error("Provide a prompt with --text or stdin.");
   }
 
-  const refinedSpec = await runCodexRefinement(prompt, { withContext: args.withContext });
-  process.stdout.write(`${refinedSpec.trim()}\n`);
+  const refinedSpec = await runCodexRefinement(prompt, {
+    withContext: args.withContext,
+    model: args.model,
+    effort: args.effort,
+  });
+  const spec = `${refinedSpec.trim()}\n`;
+  // Emit to stdout first so a bad --out path can't discard the just-computed spec.
+  process.stdout.write(spec);
+  if (args.out) {
+    await writeFile(args.out, spec);
+  }
 }
 
 main().catch((error) => {
   process.stderr.write(`${error.message}\n`);
+  if (error instanceof PartialRefinementError) {
+    process.stderr.write(`${formatPartialRefinementError(error)}\n`);
+  }
   process.exit(1);
 });

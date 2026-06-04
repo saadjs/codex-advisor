@@ -7,6 +7,41 @@ export const DEFAULT_MODEL = "gpt-5.5";
 export const DEFAULT_CONTEXT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_TIMEOUT_MS = 90000;
 export const DEFAULT_MIN_HOOK_CHARS = 40;
+export const DEFAULT_EFFORT = "low";
+export const KNOWN_MODEL_EFFORTS = new Map([
+  [DEFAULT_MODEL, new Set(["low", "medium", "high", "xhigh"])],
+  [DEFAULT_CONTEXT_MODEL, new Set(["low", "medium", "high", "xhigh"])],
+]);
+
+export class PartialRefinementError extends Error {
+  constructor(message, partialSpec) {
+    super(message);
+    this.name = "PartialRefinementError";
+    this.partialSpec = partialSpec;
+  }
+}
+
+export function formatPartialRefinementError(error) {
+  const partialSpec = typeof error?.partialSpec === "string" ? error.partialSpec.trim() : "";
+  const lines = [
+    "Partial spec before timeout (incomplete; do not implement):",
+    JSON.stringify(partialSpec),
+    "Rerun with a longer CODEX_ADVISOR_TIMEOUT_MS to get a complete spec.",
+  ];
+  return lines.join("\n");
+}
+
+export function normalizeEffort(value, { model = DEFAULT_MODEL } = {}) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`Unsupported effort for ${model}: ${value}. Expected a non-empty string.`);
+  }
+
+  const effort = value.trim();
+  const supportedEfforts = KNOWN_MODEL_EFFORTS.get(model);
+  if (!supportedEfforts) return effort;
+  if (supportedEfforts.has(effort)) return effort;
+  throw new Error(`Unsupported effort for ${model}: ${effort}. Expected one of: ${[...supportedEfforts].join(", ")}.`);
+}
 
 const OUTPUT_CONTRACT_BLOCK = [
   "<structured_output_contract>",
@@ -148,8 +183,19 @@ export function parseArgs(argv) {
     hookOutput: "standard",
     text: null,
     withContext: false,
+    model: null,
+    effort: null,
+    out: null,
   };
   const rest = [];
+
+  const readFlagValue = (index, flag) => {
+    const value = argv[index + 1];
+    if (value == null || value.startsWith("--")) {
+      throw new Error(`Missing value for ${flag}.`);
+    }
+    return value;
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -159,12 +205,21 @@ export function parseArgs(argv) {
       args.withContext = true;
     } else if (arg === "--text") {
       args.mode = "text";
-      args.text = argv[i + 1] ?? "";
+      args.text = readFlagValue(i, arg);
+      i += 1;
+    } else if (arg === "--model") {
+      args.model = readFlagValue(i, arg);
+      i += 1;
+    } else if (arg === "--effort") {
+      args.effort = readFlagValue(i, arg);
+      i += 1;
+    } else if (arg === "--out") {
+      args.out = readFlagValue(i, arg);
       i += 1;
     } else if (arg.startsWith("--hook-output=")) {
       args.hookOutput = arg.slice("--hook-output=".length);
     } else if (arg === "--hook-output") {
-      args.hookOutput = argv[i + 1] ?? "standard";
+      args.hookOutput = readFlagValue(i, arg);
       i += 1;
     } else {
       rest.push(arg);
@@ -214,13 +269,14 @@ export async function runCodexRefinement(userPrompt, options = {}) {
     : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
   const timeoutMs = options.timeoutMs ?? Number.parseInt(env.CODEX_ADVISOR_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`, 10);
   const cwd = options.cwd ?? process.cwd();
-  const effort = options.effort ?? env.CODEX_ADVISOR_EFFORT ?? "low";
+  const effort = normalizeEffort(options.effort ?? env.CODEX_ADVISOR_EFFORT ?? DEFAULT_EFFORT, { model });
   const codexBin = options.codexBin ?? env.CODEX_ADVISOR_CODEX_BIN ?? "codex";
   const spawnCodex = options.spawnCodex ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
 
   const repositoryContext = withContext
     ? options.repositoryContext ?? await gatherRepositoryContext(userPrompt, {
       cwd,
+      env,
       runCommand: options.runCommand,
       spawnCommand: options.spawnCommand,
     })
@@ -272,6 +328,11 @@ export async function runAppServerTurn({
   };
 
   return new Promise((resolve, reject) => {
+    // Prefer the explicit final answer, but fall back to streamed deltas so a
+    // turn that produced text without a final_answer item is not discarded.
+    const assembleAnswer = () => finalAnswer.trim() || Array.from(deltaByItemId.values()).join("").trim();
+
+    // Matched settle-once pair: both guard `settled`, run cleanup, then settle.
     const fail = (error) => {
       if (settled) return;
       settled = true;
@@ -279,20 +340,32 @@ export async function runAppServerTurn({
       reject(error);
     };
 
-    const finish = () => {
+    const succeed = (answer) => {
       if (settled) return;
       settled = true;
       cleanup();
-      const answer = finalAnswer.trim();
-      if (!answer) {
-        reject(new Error(`Codex returned no refined spec.${stderr ? ` stderr: ${stderr.trim()}` : ""}`));
-        return;
-      }
       resolve(answer);
     };
 
+    const finish = () => {
+      const answer = assembleAnswer();
+      if (!answer) {
+        fail(new Error(`Codex returned no refined spec.${stderr ? ` stderr: ${stderr.trim()}` : ""}`));
+        return;
+      }
+      succeed(answer);
+    };
+
     const timer = setTimeout(() => {
-      fail(new Error(`Timed out waiting for Codex after ${timeoutMs}ms.`));
+      if (settled) return;
+      // On timeout, keep streamed text structured as an error so callers do not
+      // confuse an incomplete spec with a completed refinement.
+      const partial = assembleAnswer();
+      if (!partial) {
+        fail(new Error(`Timed out waiting for Codex after ${timeoutMs}ms.`));
+        return;
+      }
+      fail(new PartialRefinementError(`Timed out waiting for Codex after ${timeoutMs}ms after receiving a partial spec (${partial.length} chars).`, partial));
     }, timeoutMs);
 
     child.once("error", (error) => {
@@ -355,9 +428,6 @@ export async function runAppServerTurn({
 
       if (message.method === "turn/completed") {
         clearTimeout(timer);
-        if (!finalAnswer && deltaByItemId.size > 0) {
-          finalAnswer = Array.from(deltaByItemId.values()).join("");
-        }
         finish();
       }
     });

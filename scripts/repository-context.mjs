@@ -52,6 +52,18 @@ const SEARCH_STOP_WORDS = new Set([
   "with",
 ]);
 
+// Resolve an integer budget from an explicit option, then an env override,
+// falling back to the constant. Invalid and below-minimum candidates are skipped.
+export function intOption(option, envValue, fallback, { min = 0 } = {}) {
+  for (const candidate of [option, envValue]) {
+    const raw = typeof candidate === "string" ? candidate.trim() : candidate;
+    if (raw == null || raw === "") continue;
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= min) return parsed;
+  }
+  return fallback;
+}
+
 export function truncateText(text, maxChars) {
   const value = String(text ?? "");
   if (value.length <= maxChars) return value;
@@ -59,12 +71,20 @@ export function truncateText(text, maxChars) {
 }
 
 export function limitLines(text, maxLines) {
+  const parsedLimit = Number(maxLines);
+  const limit = Number.isInteger(parsedLimit) ? Math.max(0, parsedLimit) : DEFAULT_CONTEXT_FILE_TREE_LINES;
   const lines = String(text ?? "").split("\n");
-  if (lines.length <= maxLines) return lines.join("\n");
-  return `${lines.slice(0, maxLines).join("\n")}\n[truncated ${lines.length - maxLines} lines]`;
+  if (lines.length <= limit) return lines.join("\n");
+  const kept = lines.slice(0, limit).join("\n");
+  const truncated = `[truncated ${lines.length - limit} lines]`;
+  return kept ? `${kept}\n${truncated}` : truncated;
 }
 
 export function deriveSearchTerms(userPrompt, { maxTerms = DEFAULT_CONTEXT_SEARCH_TERMS } = {}) {
+  const parsedLimit = Number(maxTerms);
+  const limit = Number.isInteger(parsedLimit) ? Math.max(0, parsedLimit) : DEFAULT_CONTEXT_SEARCH_TERMS;
+  if (limit === 0) return [];
+
   const seen = new Set();
   const terms = [];
   const candidates = userPrompt.match(/[A-Za-z0-9][A-Za-z0-9_./:-]{2,}/g) ?? [];
@@ -80,7 +100,7 @@ export function deriveSearchTerms(userPrompt, { maxTerms = DEFAULT_CONTEXT_SEARC
     seen.add(key);
     terms.push(term);
 
-    if (terms.length >= maxTerms) {
+    if (terms.length >= limit) {
       break;
     }
   }
@@ -235,6 +255,10 @@ async function searchTerm(run, cwd, term) {
 
 export async function gatherRepositoryContext(userPrompt, options = {}) {
   const cwd = options.cwd ?? process.cwd();
+  const env = options.env ?? process.env;
+  const maxSearchTerms = intOption(options.maxSearchTerms, env.CODEX_ADVISOR_CONTEXT_SEARCH_TERMS, DEFAULT_CONTEXT_SEARCH_TERMS);
+  const fileTreeLines = intOption(options.fileTreeLines, env.CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES, DEFAULT_CONTEXT_FILE_TREE_LINES);
+  const diffChars = intOption(options.diffChars, env.CODEX_ADVISOR_CONTEXT_DIFF_CHARS, DEFAULT_CONTEXT_DIFF_CHARS);
   const spawnCommand = options.spawnCommand ?? spawn;
   const runCommand = options.runCommand ?? ((command, args, runOptions) => runProcessCapture(command, args, {
     ...runOptions,
@@ -251,7 +275,7 @@ export async function gatherRepositoryContext(userPrompt, options = {}) {
   const contextCwd = repoRoot || cwd;
 
   const searchTerms = deriveSearchTerms(userPrompt, {
-    maxTerms: options.maxSearchTerms ?? DEFAULT_CONTEXT_SEARCH_TERMS,
+    maxTerms: maxSearchTerms,
   });
 
   // Every probe below is independent once the repo root is known, so run them
@@ -260,7 +284,7 @@ export async function gatherRepositoryContext(userPrompt, options = {}) {
     run("git", ["status", "--short"], { cwd: contextCwd, maxChars: 4000 }),
     // Diff against HEAD so staged edits are included, not just unstaged ones.
     run("git", ["diff", "HEAD", "--stat"], { cwd: contextCwd, maxChars: 4000 }),
-    run("git", ["diff", "HEAD", "--"], { cwd: contextCwd, maxChars: DEFAULT_CONTEXT_DIFF_CHARS }),
+    run("git", ["diff", "HEAD", "--"], { cwd: contextCwd, maxChars: diffChars }),
     gatherFileTree(run, contextCwd),
     Promise.all(searchTerms.map((term) => searchTerm(run, contextCwd, term))),
   ]);
@@ -274,7 +298,7 @@ export async function gatherRepositoryContext(userPrompt, options = {}) {
 
   return {
     cwd,
-    fileTree: limitLines(formatCommandOutput(fileTree.result, "(no files found)"), options.fileTreeLines ?? DEFAULT_CONTEXT_FILE_TREE_LINES),
+    fileTree: limitLines(formatCommandOutput(fileTree.result, "(no files found)"), fileTreeLines),
     fileTreeSource: fileTree.source,
     gitDiff: formatCommandOutput(gitDiffResult, "(no current git diff)"),
     gitDiffStat: formatCommandOutput(gitDiffStatResult, "(no current git diff stat)"),

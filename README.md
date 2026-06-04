@@ -7,7 +7,7 @@
 
 Codex Advisor is a Claude Code plugin that asks `codex app-server` to rewrite a rough request into a precise coding-agent spec.
 
-The default path is the `refine` skill. That keeps the user in the loop before Claude acts on the rewritten prompt and avoids adding a Codex round trip to every message.
+The default path is the `refine` command. All three skills are manually invoked only (`disable-model-invocation: true`) — Claude never triggers them on its own. That keeps the user in the loop before Claude acts on the rewritten prompt and avoids adding a Codex round trip to every message.
 
 The `refine-with-context` command adds a repo-inspection pass first: file tree, current git status and diff, and ripgrep matches for likely relevant terms. It uses `gpt-5.4-mini` by default for a faster context-aware refinement pass.
 
@@ -26,10 +26,10 @@ Or load a local checkout for development:
 claude --plugin-dir /path/to/codex-advisor
 ```
 
-Then run:
+Then invoke the command:
 
 ```text
-Use the refine skill to refine this request: add retry logic to the uploader
+/codex-advisor:refine add retry logic to the uploader
 ```
 
 The skill runs:
@@ -56,6 +56,14 @@ CODEX_ADVISOR_REQUEST
 
 The bridge reads bounded repository context before starting the Codex turn, then asks Codex to replace speculative `ASSUMPTION`s with concrete file paths, symbols, commands, tests, and current-diff references where the context supports them.
 
+To refine with context and run the result automatically — without the confirmation stop — invoke:
+
+```text
+/codex-advisor:refine-and-run add retry logic to the uploader
+```
+
+It performs the same context-aware refinement as `refine-with-context`, prints the spec for the record, and then implements it in the same turn instead of asking whether to run, revise, or stop.
+
 ## Optional Hook
 
 `hooks/hooks.example.json` contains an optional `UserPromptSubmit` hook. Rename or copy it to `hooks/hooks.json` only if you want automatic prompt refinement on every sufficiently long prompt.
@@ -71,11 +79,21 @@ Useful environment variables:
 ```bash
 CODEX_ADVISOR_MODEL=gpt-5.5
 CODEX_ADVISOR_CONTEXT_MODEL=gpt-5.4-mini
+CODEX_ADVISOR_EFFORT=low
 CODEX_ADVISOR_TIMEOUT_MS=90000
 CODEX_ADVISOR_MIN_CHARS=40
 CODEX_ADVISOR_DISABLE=1
 CODEX_ADVISOR_CODEX_BIN=codex
+CODEX_ADVISOR_CONTEXT_SEARCH_TERMS=8
+CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES=250
+CODEX_ADVISOR_CONTEXT_DIFF_CHARS=20000
 ```
+
+The `CODEX_ADVISOR_CONTEXT_*` variables tune the bounded repository context collected for `--with-context` runs: the number of ripgrep search terms, the file-tree line cap, and the character budget for the gathered `git diff`. Non-numeric values fall back to the defaults shown above.
+
+`CODEX_ADVISOR_EFFORT` sets the Codex reasoning effort. For the default models (gpt-5.5 / gpt-5.4-mini), accepted values are `low`, `medium`, `high`, `xhigh` (default `low`). Unknown custom models pass the effort through to `codex app-server`, which remains the authoritative validator.
+
+The bridge also accepts per-invocation flags: `--model <name>` and `--effort <level>` override the model and reasoning effort for a single run, and `--out <file>` writes the refined spec to a file in addition to stdout (text mode only).
 
 The Codex turn is started with `approvalPolicy: "never"` and a read-only sandbox policy so the refinement pass cannot request interactive approvals or make changes.
 

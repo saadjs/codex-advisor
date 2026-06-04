@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
+  deriveSearchTerms,
   gatherRepositoryContext,
+  intOption,
+  limitLines,
   runProcessCapture,
 } from "../scripts/repository-context.mjs";
 
@@ -65,6 +68,52 @@ test("gatherRepositoryContext falls back to git ls-files when ripgrep is unavail
 
   assert.equal(context.fileTreeSource, "git ls-files");
   assert.match(context.fileTree, /package\.json/);
+});
+
+test("intOption prefers option, then env, then the fallback, skipping non-numeric values", () => {
+  assert.equal(intOption("3", "5", 8), 3);
+  assert.equal(intOption(null, "5", 8), 5);
+  assert.equal(intOption(null, "", 8), 8);
+  assert.equal(intOption(null, "abc", 8), 8);
+  assert.equal(intOption("nope", null, 8), 8);
+  assert.equal(intOption("-1", null, 8), 8);
+  assert.equal(intOption("3abc", null, 8), 8);
+  assert.equal(intOption("0", null, 8), 0);
+});
+
+test("search and line budgets handle zero and negative bounds explicitly", () => {
+  assert.deepEqual(deriveSearchTerms("alpha bravo charlie", { maxTerms: 0 }), []);
+  assert.deepEqual(deriveSearchTerms("alpha bravo charlie", { maxTerms: -1 }), []);
+  assert.equal(limitLines("one\ntwo\nthree", 0), "[truncated 3 lines]");
+  assert.equal(limitLines("one\ntwo\nthree", -1), "[truncated 3 lines]");
+});
+
+test("gatherRepositoryContext honors CODEX_ADVISOR_CONTEXT_* env budgets", async () => {
+  let diffMaxChars = null;
+  const runCommand = async (command, args, options = {}) => {
+    const joined = `${command} ${args.join(" ")}`;
+    if (joined === "git rev-parse --show-toplevel") return { code: 0, stderr: "", stdout: "/repo\n" };
+    if (command === "rg" && args[0] === "--files") return { code: 0, stderr: "", stdout: "one.js\ntwo.js\nthree.js\n" };
+    if (joined === "git diff HEAD --") {
+      diffMaxChars = options.maxChars;
+      return { code: 0, stderr: "", stdout: "diff --git a/x b/x\n" };
+    }
+    return { code: 1, stderr: "", stdout: "" };
+  };
+
+  const context = await gatherRepositoryContext("alpha bravo charlie delta echo foxtrot", {
+    cwd: "/repo",
+    runCommand,
+    env: {
+      CODEX_ADVISOR_CONTEXT_SEARCH_TERMS: "2",
+      CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES: "1",
+      CODEX_ADVISOR_CONTEXT_DIFF_CHARS: "100",
+    },
+  });
+
+  assert.equal(context.searchTerms.length, 2);
+  assert.equal(context.fileTree, "one.js\n[truncated 2 lines]");
+  assert.equal(diffMaxChars, 100);
 });
 
 test("runProcessCapture caps output at maxChars and reports the true overflow once", async () => {

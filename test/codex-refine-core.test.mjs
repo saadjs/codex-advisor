@@ -6,8 +6,11 @@ import {
   buildRefinementInstruction,
   DEFAULT_CONTEXT_MODEL,
   DEFAULT_MODEL,
+  formatPartialRefinementError,
   formatHookOutput,
+  normalizeEffort,
   parseArgs,
+  PartialRefinementError,
   runAppServerTurn,
   runCodexRefinement,
   shouldSkipHook,
@@ -19,6 +22,15 @@ test("uses gpt-5.5 as the default Codex model", () => {
 
 test("uses gpt-5.4-mini as the default context-aware Codex model", () => {
   assert.equal(DEFAULT_CONTEXT_MODEL, "gpt-5.4-mini");
+});
+
+test("normalizeEffort validates known model efforts and passes custom model efforts through", () => {
+  assert.equal(normalizeEffort("low"), "low");
+  assert.equal(normalizeEffort("xhigh"), "xhigh");
+  assert.throws(() => normalizeEffort("turbo"), /Unsupported effort for gpt-5\.5: turbo/);
+  assert.throws(() => normalizeEffort(undefined), /Expected a non-empty string/);
+  assert.throws(() => normalizeEffort("", { model: "custom-model" }), /Expected a non-empty string/);
+  assert.equal(normalizeEffort("turbo", { model: "custom-model" }), "turbo");
 });
 
 test("buildRefinementInstruction asks Codex to rewrite instead of clarify", () => {
@@ -85,12 +97,18 @@ test("parseArgs supports hook output format options", () => {
     mode: "hook",
     text: null,
     withContext: false,
+    model: null,
+    effort: null,
+    out: null,
   });
   assert.deepEqual(parseArgs(["--text", "fix the test"]), {
     hookOutput: "standard",
     mode: "text",
     text: "fix the test",
     withContext: false,
+    model: null,
+    effort: null,
+    out: null,
   });
 });
 
@@ -100,7 +118,50 @@ test("parseArgs supports context-aware text mode", () => {
     mode: "text",
     text: "fix the test",
     withContext: true,
+    model: null,
+    effort: null,
+    out: null,
   });
+});
+
+test("parseArgs supports --model and --effort overrides", () => {
+  assert.deepEqual(parseArgs(["--model", "gpt-x", "--effort", "high", "--text", "hi"]), {
+    hookOutput: "standard",
+    mode: "text",
+    text: "hi",
+    withContext: false,
+    model: "gpt-x",
+    effort: "high",
+    out: null,
+  });
+});
+
+test("parseArgs supports --out for persisting the refined spec", () => {
+  assert.deepEqual(parseArgs(["--out", "spec.md", "--text", "hi"]), {
+    hookOutput: "standard",
+    mode: "text",
+    text: "hi",
+    withContext: false,
+    model: null,
+    effort: null,
+    out: "spec.md",
+  });
+});
+
+test("parseArgs rejects missing values before consuming the next flag", () => {
+  for (const flag of ["--text", "--model", "--effort", "--out", "--hook-output"]) {
+    assert.throws(() => parseArgs([flag]), new RegExp(`Missing value for ${flag}`));
+    assert.throws(() => parseArgs([flag, "--with-context", "hi"]), new RegExp(`Missing value for ${flag}`));
+  }
+});
+
+test("formatPartialRefinementError emits a safe structured partial spec", () => {
+  const error = new PartialRefinementError("timeout", "Goal: partial\nScope: incomplete");
+  const output = formatPartialRefinementError(error);
+
+  assert.match(output, /incomplete; do not implement/);
+  assert.match(output, /"Goal: partial\\nScope: incomplete"/);
+  assert.match(output, /CODEX_ADVISOR_TIMEOUT_MS/);
 });
 
 test("buildAuthoritativeContext frames the refined spec as primary", () => {
@@ -166,6 +227,65 @@ test("runAppServerTurn sends safe app-server turn parameters and returns final a
   assert.equal(turnStart.params.approvalPolicy, "never");
   assert.deepEqual(turnStart.params.sandboxPolicy, { type: "readOnly", networkAccess: false });
   assert.deepEqual(turnStart.params.input, [{ type: "text", text: "Rewrite this" }]);
+});
+
+function makeFakeChild() {
+  const child = {
+    killed: false,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill() {
+      this.killed = true;
+    },
+    once(event, handler) {
+      this[`on_${event}`] = handler;
+      return this;
+    },
+  };
+  return child;
+}
+
+test("runAppServerTurn rejects with a structured partial spec when the turn times out", async () => {
+  const fakeChild = makeFakeChild();
+
+  const resultPromise = runAppServerTurn({
+    cwd: "/tmp/project",
+    instruction: "Rewrite this",
+    spawnCodex: () => fakeChild,
+    timeoutMs: 50,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  // Stream partial deltas, then never send turn/completed so the timer fires.
+  fakeChild.stdout.write(`${JSON.stringify({ method: "agentMessage/delta", params: { itemId: "a", delta: "Goal: " } })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "agentMessage/delta", params: { itemId: "a", delta: "salvage me." } })}\n`);
+
+  await assert.rejects(resultPromise, (error) => {
+    assert.ok(error instanceof PartialRefinementError);
+    assert.equal(error.partialSpec, "Goal: salvage me.");
+    assert.match(error.message, /Timed out waiting for Codex after 50ms/);
+    return true;
+  });
+  assert.equal(fakeChild.killed, true);
+});
+
+test("runAppServerTurn still rejects on timeout when nothing was streamed", async () => {
+  const fakeChild = makeFakeChild();
+
+  const resultPromise = runAppServerTurn({
+    cwd: "/tmp/project",
+    instruction: "Rewrite this",
+    spawnCodex: () => fakeChild,
+    timeoutMs: 50,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+
+  await assert.rejects(resultPromise, /Timed out waiting for Codex after 50ms/);
 });
 
 test("runCodexRefinement with context sends context-aware instruction with the mini model by default", async () => {
