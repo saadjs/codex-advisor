@@ -8,14 +8,29 @@ export const DEFAULT_CONTEXT_MODEL = "gpt-5.4-mini";
 export const DEFAULT_TIMEOUT_MS = 90000;
 export const DEFAULT_MIN_HOOK_CHARS = 40;
 export const DEFAULT_EFFORT = "low";
-// The authoritative effort set is per-model (model/list -> supportedReasoningEfforts).
-// This is a fail-fast typo guard covering the levels the models this plugin uses
-// advertise (gpt-5.5 / gpt-5.4-mini): low < medium < high < xhigh.
-export const VALID_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
+export const KNOWN_MODEL_EFFORTS = new Map([
+  [DEFAULT_MODEL, new Set(["low", "medium", "high", "xhigh"])],
+  [DEFAULT_CONTEXT_MODEL, new Set(["low", "medium", "high", "xhigh"])],
+]);
 
-export function normalizeEffort(value) {
-  if (VALID_EFFORTS.has(value)) return value;
-  throw new Error(`Unsupported effort: ${value}. Expected one of: ${[...VALID_EFFORTS].join(", ")}.`);
+export class PartialRefinementError extends Error {
+  constructor(message, partialSpec) {
+    super(message);
+    this.name = "PartialRefinementError";
+    this.partialSpec = partialSpec;
+  }
+}
+
+export function normalizeEffort(value, { model = DEFAULT_MODEL } = {}) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`Unsupported effort for ${model}: ${value}. Expected a non-empty string.`);
+  }
+
+  const effort = value.trim();
+  const supportedEfforts = KNOWN_MODEL_EFFORTS.get(model);
+  if (!supportedEfforts) return effort;
+  if (supportedEfforts.has(effort)) return effort;
+  throw new Error(`Unsupported effort for ${model}: ${effort}. Expected one of: ${[...supportedEfforts].join(", ")}.`);
 }
 
 const OUTPUT_CONTRACT_BLOCK = [
@@ -236,7 +251,7 @@ export async function runCodexRefinement(userPrompt, options = {}) {
     : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
   const timeoutMs = options.timeoutMs ?? Number.parseInt(env.CODEX_ADVISOR_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`, 10);
   const cwd = options.cwd ?? process.cwd();
-  const effort = normalizeEffort(options.effort ?? env.CODEX_ADVISOR_EFFORT ?? DEFAULT_EFFORT);
+  const effort = normalizeEffort(options.effort ?? env.CODEX_ADVISOR_EFFORT ?? DEFAULT_EFFORT, { model });
   const codexBin = options.codexBin ?? env.CODEX_ADVISOR_CODEX_BIN ?? "codex";
   const spawnCodex = options.spawnCodex ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
 
@@ -325,16 +340,14 @@ export async function runAppServerTurn({
 
     const timer = setTimeout(() => {
       if (settled) return;
-      // On timeout, salvage any spec streamed so far instead of failing outright.
+      // On timeout, keep streamed text structured as an error so callers do not
+      // confuse an incomplete spec with a completed refinement.
       const partial = assembleAnswer();
       if (!partial) {
         fail(new Error(`Timed out waiting for Codex after ${timeoutMs}ms.`));
         return;
       }
-      // Flag that this spec is truncated — callers like refine-and-run would
-      // otherwise auto-execute a partial request with no signal.
-      process.stderr.write(`Codex timed out after ${timeoutMs}ms; returning partial spec (${partial.length} chars).\n`);
-      succeed(partial);
+      fail(new PartialRefinementError(`Timed out waiting for Codex after ${timeoutMs}ms after receiving a partial spec (${partial.length} chars).`, partial));
     }, timeoutMs);
 
     child.once("error", (error) => {

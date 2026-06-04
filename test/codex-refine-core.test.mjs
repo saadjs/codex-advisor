@@ -9,6 +9,7 @@ import {
   formatHookOutput,
   normalizeEffort,
   parseArgs,
+  PartialRefinementError,
   runAppServerTurn,
   runCodexRefinement,
   shouldSkipHook,
@@ -22,11 +23,13 @@ test("uses gpt-5.4-mini as the default context-aware Codex model", () => {
   assert.equal(DEFAULT_CONTEXT_MODEL, "gpt-5.4-mini");
 });
 
-test("normalizeEffort accepts valid efforts and rejects unknown ones", () => {
+test("normalizeEffort validates known model efforts and passes custom model efforts through", () => {
   assert.equal(normalizeEffort("low"), "low");
   assert.equal(normalizeEffort("xhigh"), "xhigh");
-  assert.throws(() => normalizeEffort("turbo"), /Unsupported effort: turbo/);
-  assert.throws(() => normalizeEffort(undefined), /Expected one of/);
+  assert.throws(() => normalizeEffort("turbo"), /Unsupported effort for gpt-5\.5: turbo/);
+  assert.throws(() => normalizeEffort(undefined), /Expected a non-empty string/);
+  assert.throws(() => normalizeEffort("", { model: "custom-model" }), /Expected a non-empty string/);
+  assert.equal(normalizeEffort("turbo", { model: "custom-model" }), "turbo");
 });
 
 test("buildRefinementInstruction asks Codex to rewrite instead of clarify", () => {
@@ -226,7 +229,7 @@ function makeFakeChild() {
   return child;
 }
 
-test("runAppServerTurn salvages streamed deltas when the turn times out", async () => {
+test("runAppServerTurn rejects with a structured partial spec when the turn times out", async () => {
   const fakeChild = makeFakeChild();
 
   const resultPromise = runAppServerTurn({
@@ -243,7 +246,12 @@ test("runAppServerTurn salvages streamed deltas when the turn times out", async 
   fakeChild.stdout.write(`${JSON.stringify({ method: "agentMessage/delta", params: { itemId: "a", delta: "Goal: " } })}\n`);
   fakeChild.stdout.write(`${JSON.stringify({ method: "agentMessage/delta", params: { itemId: "a", delta: "salvage me." } })}\n`);
 
-  assert.equal(await resultPromise, "Goal: salvage me.");
+  await assert.rejects(resultPromise, (error) => {
+    assert.ok(error instanceof PartialRefinementError);
+    assert.equal(error.partialSpec, "Goal: salvage me.");
+    assert.match(error.message, /Timed out waiting for Codex after 50ms/);
+    return true;
+  });
   assert.equal(fakeChild.killed, true);
 });
 

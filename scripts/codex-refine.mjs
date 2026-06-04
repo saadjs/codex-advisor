@@ -5,6 +5,7 @@ import {
   extractPromptFromHookInput,
   formatHookOutput,
   parseArgs,
+  PartialRefinementError,
   readAll,
   runCodexRefinement,
   shouldSkipHook,
@@ -50,5 +51,8 @@ async function main() {
 
 main().catch((error) => {
   process.stderr.write(`${error.message}\n`);
+  if (error instanceof PartialRefinementError) {
+    process.stderr.write("Partial spec was discarded; rerun with a longer CODEX_ADVISOR_TIMEOUT_MS to get a complete spec.\n");
+  }
   process.exit(1);
 });
