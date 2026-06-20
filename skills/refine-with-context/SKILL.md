@@ -1,6 +1,7 @@
 ---
 name: refine-with-context
 description: Refine a rough coding request into a precise spec using current repository context before Claude Code executes it.
+argument-hint: [request-to-refine]
 disable-model-invocation: true
 ---
 

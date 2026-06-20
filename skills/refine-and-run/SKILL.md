@@ -1,6 +1,7 @@
 ---
 name: refine-and-run
 description: Refine a rough coding request using current repository context, then execute the refined spec in the same turn.
+argument-hint: [request-to-refine-and-run]
 disable-model-invocation: true
 ---
 

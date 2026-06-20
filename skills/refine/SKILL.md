@@ -1,6 +1,7 @@
 ---
 name: refine
 description: Use when the user wants to refine, sharpen, improve, rewrite, or turn a rough coding request into a precise actionable spec before Claude Code executes it.
+argument-hint: [request-to-refine]
 disable-model-invocation: true
 ---
 
