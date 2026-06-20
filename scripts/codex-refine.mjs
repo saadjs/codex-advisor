@@ -29,6 +29,7 @@ async function main() {
     const refinedSpec = await runCodexRefinement(prompt, {
       cwd,
       withContext: args.withContext,
+      jsonOutput: args.json,
       settings,
     });
     process.stdout.write(JSON.stringify(formatHookOutput(refinedSpec, { hookOutput: args.hookOutput })));
@@ -43,6 +44,7 @@ async function main() {
   const settings = resolveSettings({ cwd: process.cwd(), flags });
   const refinedSpec = await runCodexRefinement(prompt, {
     withContext: args.withContext,
+    jsonOutput: args.json,
     settings,
   });
   const spec = `${refinedSpec.trim()}\n`;

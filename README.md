@@ -112,7 +112,23 @@ per-invocation flag  →  [codex_advisor] table  →  Codex top-level model/effo
 
 So a project that already pins `model = "gpt-5.4-mini"` in `.codex/config.toml` is respected without re-specifying it, while an explicit `--model` still wins for a single run.
 
-The bridge also accepts per-invocation flags: `--model <name>` and `--effort <level>` override the model and reasoning effort for a single run, and `--out <file>` writes the refined spec to a file in addition to stdout (text mode only).
+## JSON output
+
+Pass `--json` to emit a structured spec instead of Markdown:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-refine.mjs" --json <<'CODEX_ADVISOR_REQUEST'
+add retry logic to the uploader
+CODEX_ADVISOR_REQUEST
+```
+
+The bridge validates the shape of the returned JSON against [`schemas/refined-spec.schema.json`](schemas/refined-spec.schema.json) (`goal`, `scope`, `assumptions[]`, `requirements[]`, `verification[]`, `acceptance_criteria[]`), pretty-prints it, and fails with a clear error rather than emitting an invalid or partial object. Extra keys are dropped rather than rejected, so minor over-generation does not fail the run. `--json` works with `--with-context` and `--out`, and is independent of hook mode.
+
+## Spec-writing reference
+
+The plugin bundles a `codex-spec-prompting` skill under `skills/codex-spec-prompting/` with `references/` recipes and antipatterns for writing precise coding-agent specs. It documents the same six-section standard (Goal, Scope, Assumptions, Requirements, Verification, Acceptance Criteria) the bridge applies, so Claude can consult it when hand-writing or judging a spec. Unlike the `refine*` commands, it is model-invocable.
+
+The bridge also accepts per-invocation flags: `--model <name>` and `--effort <level>` override the model and reasoning effort for a single run, `--out <file>` writes the refined spec to a file in addition to stdout, and `--json` returns a validated structured spec (see [JSON output](#json-output)).
 
 The Codex turn is started with `approvalPolicy: "never"` and a read-only sandbox policy so the refinement pass cannot request interactive approvals or make changes.
 

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Advisor refined spec",
+  "description": "Structured spec emitted by `codex-refine.mjs --json`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "goal",
+    "scope",
+    "assumptions",
+    "requirements",
+    "verification",
+    "acceptance_criteria"
+  ],
+  "properties": {
+    "goal": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Single concrete sentence stating what to achieve."
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What is in scope, and explicitly what is not."
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Inferred low-risk defaults, each prefixed with 'ASSUMPTION: '.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "description": "Verifiable, imperative requirements.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "verification": {
+      "type": "array",
+      "description": "Commands, tests, or checks that confirm the work.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "description": "Observable, checkable conditions for completion.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

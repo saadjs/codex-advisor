@@ -9,7 +9,9 @@ import {
   formatPartialRefinementError,
   formatHookOutput,
   normalizeEffort,
+  normalizeRefinedSpec,
   parseArgs,
+  parseRefinedSpecJson,
   PartialRefinementError,
   resolveSettings,
   runAppServerTurn,
@@ -55,8 +57,169 @@ test("buildRefinementInstruction asks Codex to rewrite instead of clarify", () =
   assert.match(instruction, /ASSUMPTION/);
   assert.match(instruction, /fix upload retries/);
   assert.match(instruction, /Return only the rewritten spec/);
+  assert.match(instruction, /<spec_quality_guidance>/);
   // The self-directed path must not leak the context-aware framing.
   assert.doesNotMatch(instruction, /<repository_context>/);
+});
+
+test("buildRefinementInstruction with jsonOutput requests a single JSON object", () => {
+  const instruction = buildRefinementInstruction("fix upload retries", { jsonOutput: true });
+
+  assert.match(instruction, /Return only a single JSON object/);
+  assert.match(instruction, /"acceptance_criteria": string\[\]/);
+  assert.match(instruction, /<spec_quality_guidance>/);
+  // JSON mode must not also emit the Markdown contract.
+  assert.doesNotMatch(instruction, /Use compact Markdown/);
+});
+
+test("parseRefinedSpecJson parses, tolerates a code fence, and drops extra keys", () => {
+  const fenced = [
+    "```json",
+    JSON.stringify({
+      goal: "Add retries",
+      scope: "Upload path only",
+      assumptions: ["ASSUMPTION: transient errors"],
+      requirements: ["Retry up to 3 times"],
+      verification: ["npm test -- upload"],
+      acceptance_criteria: ["A 503 then 200 succeeds"],
+      extra: "ignored",
+    }),
+    "```",
+  ].join("\n");
+
+  const parsed = parseRefinedSpecJson(fenced);
+  assert.equal(parsed.goal, "Add retries");
+  assert.deepEqual(parsed.requirements, ["Retry up to 3 times"]);
+  // Unknown keys are dropped rather than rejected.
+  assert.equal(parsed.extra, undefined);
+});
+
+test("normalizeRefinedSpec rejects missing strings and mistyped arrays", () => {
+  const base = {
+    goal: "g",
+    scope: "s",
+    assumptions: [],
+    requirements: [],
+    verification: [],
+    acceptance_criteria: [],
+  };
+
+  assert.throws(() => normalizeRefinedSpec({ ...base, goal: "" }), /non-empty "goal"/);
+  assert.throws(() => normalizeRefinedSpec({ ...base, requirements: "nope" }), /"requirements" must be an array of non-empty strings/);
+  assert.throws(() => normalizeRefinedSpec({ ...base, verification: [1] }), /"verification" must be an array of non-empty strings/);
+  assert.throws(() => normalizeRefinedSpec({ ...base, acceptance_criteria: [""] }), /"acceptance_criteria" must be an array of non-empty strings/);
+  assert.throws(() => parseRefinedSpecJson("not json"), /did not return valid JSON/);
+});
+
+test("runCodexRefinement falls back to .codex/config.toml model and effort", async () => {
+  const writes = [];
+  const fakeChild = makeFakeChild();
+  fakeChild.stdin.on("data", (chunk) => {
+    for (const line of String(chunk).trim().split("\n")) {
+      if (line) writes.push(JSON.parse(line));
+    }
+  });
+
+  const resultPromise = runCodexRefinement("fix upload retries", {
+    cwd: "/repo",
+    settings: defaultSettings({ model: "gpt-5.4-mini", effort: "high" }),
+    spawnCodex: () => fakeChild,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({
+    method: "item/completed",
+    params: { item: { phase: "final_answer", text: "Goal: done.", type: "agentMessage" } },
+  })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+
+  await resultPromise;
+  const turnStart = writes.find((message) => message.method === "turn/start");
+  assert.equal(turnStart.params.model, "gpt-5.4-mini");
+  assert.equal(turnStart.params.effort, "high");
+});
+
+test("runCodexRefinement prefers flag over config file", async () => {
+  const fakeChild = makeFakeChild();
+  const writes = [];
+  fakeChild.stdin.on("data", (chunk) => {
+    for (const line of String(chunk).trim().split("\n")) {
+      if (line) writes.push(JSON.parse(line));
+    }
+  });
+
+  const resultPromise = runCodexRefinement("fix upload retries", {
+    cwd: "/repo",
+    model: "gpt-flag",
+    readConfigFile: () => 'model = "gpt-config"',
+    spawnCodex: () => fakeChild,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({
+    method: "item/completed",
+    params: { item: { phase: "final_answer", text: "Goal: done.", type: "agentMessage" } },
+  })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+
+  await resultPromise;
+  const turnStart = writes.find((message) => message.method === "turn/start");
+  assert.equal(turnStart.params.model, "gpt-flag");
+});
+
+test("runCodexRefinement rejects conflicting settings and flag overrides", async () => {
+  await assert.rejects(
+    runCodexRefinement("fix upload retries", {
+      cwd: "/repo",
+      model: "gpt-flag",
+      settings: defaultSettings(),
+    }),
+    /Cannot combine options\.settings with options\.model or options\.effort/
+  );
+  await assert.rejects(
+    runCodexRefinement("fix upload retries", {
+      cwd: "/repo",
+      effort: "high",
+      settings: defaultSettings(),
+    }),
+    /Cannot combine options\.settings with options\.model or options\.effort/
+  );
+});
+
+test("runCodexRefinement with jsonOutput returns a validated, pretty-printed spec", async () => {
+  const fakeChild = makeFakeChild();
+  const resultPromise = runCodexRefinement("fix upload retries", {
+    cwd: "/repo",
+    jsonOutput: true,
+    settings: defaultSettings(),
+    spawnCodex: () => fakeChild,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  const specJson = JSON.stringify({
+    goal: "Add retries",
+    scope: "Upload path only",
+    assumptions: [],
+    requirements: ["Retry up to 3 times"],
+    verification: ["npm test"],
+    acceptance_criteria: ["503 then 200 succeeds"],
+  });
+  fakeChild.stdout.write(`${JSON.stringify({
+    method: "item/completed",
+    params: { item: { phase: "final_answer", text: specJson, type: "agentMessage" } },
+  })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+
+  const result = await resultPromise;
+  const parsed = JSON.parse(result);
+  assert.equal(parsed.goal, "Add retries");
+  // Pretty-printed output (two-space indent) is returned.
+  assert.match(result, /\n {2}"goal":/);
 });
 
 test("buildRefinementInstruction with repositoryContext resolves assumptions from repo context", () => {
@@ -110,6 +273,7 @@ test("parseArgs supports hook output format options", () => {
     model: null,
     effort: null,
     out: null,
+    json: false,
   });
   assert.deepEqual(parseArgs(["--text", "fix the test"]), {
     hookOutput: "standard",
@@ -119,6 +283,20 @@ test("parseArgs supports hook output format options", () => {
     model: null,
     effort: null,
     out: null,
+    json: false,
+  });
+});
+
+test("parseArgs supports --json structured output", () => {
+  assert.deepEqual(parseArgs(["--json", "--text", "fix the test"]), {
+    hookOutput: "standard",
+    mode: "text",
+    text: "fix the test",
+    withContext: false,
+    model: null,
+    effort: null,
+    out: null,
+    json: true,
   });
 });
 
@@ -131,6 +309,7 @@ test("parseArgs supports context-aware text mode", () => {
     model: null,
     effort: null,
     out: null,
+    json: false,
   });
 });
 
@@ -143,6 +322,7 @@ test("parseArgs supports --model and --effort overrides", () => {
     model: "gpt-x",
     effort: "high",
     out: null,
+    json: false,
   });
 });
 
@@ -155,6 +335,7 @@ test("parseArgs supports --out for persisting the refined spec", () => {
     model: null,
     effort: null,
     out: "spec.md",
+    json: false,
   });
 });
 
@@ -296,84 +477,6 @@ test("runAppServerTurn still rejects on timeout when nothing was streamed", asyn
   fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
 
   await assert.rejects(resultPromise, /Timed out waiting for Codex after 50ms/);
-});
-
-test("runCodexRefinement falls back to .codex/config.toml model and effort", async () => {
-  const writes = [];
-  const fakeChild = makeFakeChild();
-  fakeChild.stdin.on("data", (chunk) => {
-    for (const line of String(chunk).trim().split("\n")) {
-      if (line) writes.push(JSON.parse(line));
-    }
-  });
-
-  const resultPromise = runCodexRefinement("fix upload retries", {
-    cwd: "/repo",
-    settings: defaultSettings({ model: "gpt-5.4-mini", effort: "high" }),
-    spawnCodex: () => fakeChild,
-  });
-
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({
-    method: "item/completed",
-    params: { item: { phase: "final_answer", text: "Goal: done.", type: "agentMessage" } },
-  })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
-
-  await resultPromise;
-  const turnStart = writes.find((message) => message.method === "turn/start");
-  assert.equal(turnStart.params.model, "gpt-5.4-mini");
-  assert.equal(turnStart.params.effort, "high");
-});
-
-test("runCodexRefinement prefers flag over config file", async () => {
-  const fakeChild = makeFakeChild();
-  const writes = [];
-  fakeChild.stdin.on("data", (chunk) => {
-    for (const line of String(chunk).trim().split("\n")) {
-      if (line) writes.push(JSON.parse(line));
-    }
-  });
-
-  const resultPromise = runCodexRefinement("fix upload retries", {
-    cwd: "/repo",
-    model: "gpt-flag",
-    readConfigFile: () => 'model = "gpt-config"',
-    spawnCodex: () => fakeChild,
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
-  await new Promise((resolve) => setImmediate(resolve));
-  fakeChild.stdout.write(`${JSON.stringify({
-    method: "item/completed",
-    params: { item: { phase: "final_answer", text: "Goal: done.", type: "agentMessage" } },
-  })}\n`);
-  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
-
-  await resultPromise;
-  const turnStart = writes.find((message) => message.method === "turn/start");
-  assert.equal(turnStart.params.model, "gpt-flag");
-});
-
-test("runCodexRefinement rejects conflicting settings and flag overrides", async () => {
-  await assert.rejects(
-    runCodexRefinement("fix upload retries", {
-      cwd: "/repo",
-      model: "gpt-flag",
-      settings: defaultSettings(),
-    }),
-    /Cannot combine options\.settings with options\.model or options\.effort/
-  );
-  await assert.rejects(
-    runCodexRefinement("fix upload retries", {
-      cwd: "/repo",
-      effort: "high",
-      settings: defaultSettings(),
-    }),
-    /Cannot combine options\.settings with options\.model or options\.effort/
-  );
 });
 
 test("runCodexRefinement with context sends context-aware instruction with the mini model by default", async () => {
