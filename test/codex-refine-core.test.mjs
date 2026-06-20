@@ -11,10 +11,20 @@ import {
   normalizeEffort,
   parseArgs,
   PartialRefinementError,
+  resolveSettings,
   runAppServerTurn,
   runCodexRefinement,
   shouldSkipHook,
 } from "../scripts/codex-refine-core.mjs";
+
+// Resolve settings with no config file present, for hermetic runCodexRefinement
+// tests that should see only built-in defaults.
+const noConfig = () => {
+  const error = new Error("ENOENT");
+  error.code = "ENOENT";
+  throw error;
+};
+const defaultSettings = (over = {}) => ({ ...resolveSettings({ env: {}, readFile: noConfig }), ...over });
 
 test("uses gpt-5.5 as the default Codex model", () => {
   assert.equal(DEFAULT_MODEL, "gpt-5.5");
@@ -85,10 +95,10 @@ test("formatHookOutput can include legacy additionalContext compatibility", () =
   assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage);
 });
 
-test("hook mode skips trivial prompts by default", () => {
+test("hook mode skips trivial prompts and honors the disable kill switch", () => {
   assert.equal(shouldSkipHook("short"), true);
-  assert.equal(shouldSkipHook("write a regression test for the retry behavior", { CODEX_ADVISOR_MIN_CHARS: "10" }), false);
-  assert.equal(shouldSkipHook("write a regression test", { CODEX_ADVISOR_DISABLE: "1" }), true);
+  assert.equal(shouldSkipHook("write a regression test for the retry behavior", { minChars: 10 }), false);
+  assert.equal(shouldSkipHook("write a regression test", { disable: true }), true);
 });
 
 test("parseArgs supports hook output format options", () => {
@@ -161,7 +171,7 @@ test("formatPartialRefinementError emits a safe structured partial spec", () => 
 
   assert.match(output, /incomplete; do not implement/);
   assert.match(output, /"Goal: partial\\nScope: incomplete"/);
-  assert.match(output, /CODEX_ADVISOR_TIMEOUT_MS/);
+  assert.match(output, /timeout_ms/);
 });
 
 test("buildAuthoritativeContext frames the refined spec as primary", () => {
@@ -288,6 +298,84 @@ test("runAppServerTurn still rejects on timeout when nothing was streamed", asyn
   await assert.rejects(resultPromise, /Timed out waiting for Codex after 50ms/);
 });
 
+test("runCodexRefinement falls back to .codex/config.toml model and effort", async () => {
+  const writes = [];
+  const fakeChild = makeFakeChild();
+  fakeChild.stdin.on("data", (chunk) => {
+    for (const line of String(chunk).trim().split("\n")) {
+      if (line) writes.push(JSON.parse(line));
+    }
+  });
+
+  const resultPromise = runCodexRefinement("fix upload retries", {
+    cwd: "/repo",
+    settings: defaultSettings({ model: "gpt-5.4-mini", effort: "high" }),
+    spawnCodex: () => fakeChild,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({
+    method: "item/completed",
+    params: { item: { phase: "final_answer", text: "Goal: done.", type: "agentMessage" } },
+  })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+
+  await resultPromise;
+  const turnStart = writes.find((message) => message.method === "turn/start");
+  assert.equal(turnStart.params.model, "gpt-5.4-mini");
+  assert.equal(turnStart.params.effort, "high");
+});
+
+test("runCodexRefinement prefers flag over config file", async () => {
+  const fakeChild = makeFakeChild();
+  const writes = [];
+  fakeChild.stdin.on("data", (chunk) => {
+    for (const line of String(chunk).trim().split("\n")) {
+      if (line) writes.push(JSON.parse(line));
+    }
+  });
+
+  const resultPromise = runCodexRefinement("fix upload retries", {
+    cwd: "/repo",
+    model: "gpt-flag",
+    readConfigFile: () => 'model = "gpt-config"',
+    spawnCodex: () => fakeChild,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({ id: 1, result: { thread: { id: "thread-1" } } })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  fakeChild.stdout.write(`${JSON.stringify({
+    method: "item/completed",
+    params: { item: { phase: "final_answer", text: "Goal: done.", type: "agentMessage" } },
+  })}\n`);
+  fakeChild.stdout.write(`${JSON.stringify({ method: "turn/completed", params: {} })}\n`);
+
+  await resultPromise;
+  const turnStart = writes.find((message) => message.method === "turn/start");
+  assert.equal(turnStart.params.model, "gpt-flag");
+});
+
+test("runCodexRefinement rejects conflicting settings and flag overrides", async () => {
+  await assert.rejects(
+    runCodexRefinement("fix upload retries", {
+      cwd: "/repo",
+      model: "gpt-flag",
+      settings: defaultSettings(),
+    }),
+    /Cannot combine options\.settings with options\.model or options\.effort/
+  );
+  await assert.rejects(
+    runCodexRefinement("fix upload retries", {
+      cwd: "/repo",
+      effort: "high",
+      settings: defaultSettings(),
+    }),
+    /Cannot combine options\.settings with options\.model or options\.effort/
+  );
+});
+
 test("runCodexRefinement with context sends context-aware instruction with the mini model by default", async () => {
   const writes = [];
   const fakeChild = {
@@ -312,6 +400,7 @@ test("runCodexRefinement with context sends context-aware instruction with the m
   const resultPromise = runCodexRefinement("fix upload retries", {
     cwd: "/repo",
     withContext: true,
+    settings: defaultSettings(),
     repositoryContext: [
       "# Repository Context",
       "## Current Git Diff (`git diff --`)",

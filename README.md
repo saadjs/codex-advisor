@@ -74,24 +74,43 @@ Current Claude Code hook docs describe `systemMessage` as the standard way to pa
 node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-refine.mjs" --hook --hook-output=both
 ```
 
-Useful environment variables:
+## Configuration
 
-```bash
-CODEX_ADVISOR_MODEL=gpt-5.5
-CODEX_ADVISOR_CONTEXT_MODEL=gpt-5.4-mini
-CODEX_ADVISOR_EFFORT=low
-CODEX_ADVISOR_TIMEOUT_MS=90000
-CODEX_ADVISOR_MIN_CHARS=40
-CODEX_ADVISOR_DISABLE=1
-CODEX_ADVISOR_CODEX_BIN=codex
-CODEX_ADVISOR_CONTEXT_SEARCH_TERMS=8
-CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES=250
-CODEX_ADVISOR_CONTEXT_DIFF_CHARS=20000
+All tunables live in the same `.codex/config.toml` file Codex itself uses. Put user-level defaults in `~/.codex/config.toml` and project overrides in `<cwd>/.codex/config.toml`.
+
+```toml
+# Shared with Codex itself
+model = "gpt-5.5"
+model_reasoning_effort = "low"
+
+[codex_advisor]
+context_model = "gpt-5.4-mini"
+timeout_ms = 90000
+min_chars = 40
+disable = false
+codex_bin = "codex"
+
+[codex_advisor.context]
+search_terms = 8
+file_tree_lines = 250
+diff_chars = 20000
 ```
 
-The `CODEX_ADVISOR_CONTEXT_*` variables tune the bounded repository context collected for `--with-context` runs: the number of ripgrep search terms, the file-tree line cap, and the character budget for the gathered `git diff`. Non-numeric values fall back to the defaults shown above.
+Every key is optional. Omit any and it falls back to the default shown above.
 
-`CODEX_ADVISOR_EFFORT` sets the Codex reasoning effort. For the default models (gpt-5.5 / gpt-5.4-mini), accepted values are `low`, `medium`, `high`, `xhigh` (default `low`). Unknown custom models pass the effort through to `codex app-server`, which remains the authoritative validator.
+- `model` / `model_reasoning_effort` at the top level are Codex's own keys; the advisor reads them as defaults.
+- `[codex_advisor]` holds advisor-specific settings. `context_model` is used for `--with-context` runs; `model` here overrides the top-level model for advisor runs only.
+- `[codex_advisor.context]` tunes the bounded repository context collected for `--with-context`: `search_terms` (ripgrep term count), `file_tree_lines` (file-tree line cap), and `diff_chars` (character budget for `git diff`).
+- `disable = true` turns off the optional `UserPromptSubmit` hook (see [Optional Hook](#optional-hook)).
+- The only environment variable still consulted is `CODEX_ADVISOR_DISABLE=1` (or `true`), a file-free kill switch for the same hook.
+
+Effective values resolve with this precedence:
+
+```text
+per-invocation flag  →  [codex_advisor] table  →  Codex top-level model/effort  →  built-in default
+```
+
+So a project that already pins `model = "gpt-5.4-mini"` in `.codex/config.toml` is respected without re-specifying it, while an explicit `--model` still wins for a single run.
 
 The bridge also accepts per-invocation flags: `--model <name>` and `--effort <level>` override the model and reasoning effort for a single run, and `--out <file>` writes the refined spec to a file in addition to stdout (text mode only).
 

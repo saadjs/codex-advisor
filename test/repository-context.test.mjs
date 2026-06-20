@@ -70,7 +70,7 @@ test("gatherRepositoryContext falls back to git ls-files when ripgrep is unavail
   assert.match(context.fileTree, /package\.json/);
 });
 
-test("intOption prefers option, then env, then the fallback, skipping non-numeric values", () => {
+test("intOption prefers option, then settings value, then the fallback, skipping non-numeric values", () => {
   assert.equal(intOption("3", "5", 8), 3);
   assert.equal(intOption(null, "5", 8), 5);
   assert.equal(intOption(null, "", 8), 8);
@@ -88,7 +88,7 @@ test("search and line budgets handle zero and negative bounds explicitly", () =>
   assert.equal(limitLines("one\ntwo\nthree", -1), "[truncated 3 lines]");
 });
 
-test("gatherRepositoryContext honors CODEX_ADVISOR_CONTEXT_* env budgets", async () => {
+test("gatherRepositoryContext honors resolved context budgets", async () => {
   let diffMaxChars = null;
   const runCommand = async (command, args, options = {}) => {
     const joined = `${command} ${args.join(" ")}`;
@@ -104,11 +104,7 @@ test("gatherRepositoryContext honors CODEX_ADVISOR_CONTEXT_* env budgets", async
   const context = await gatherRepositoryContext("alpha bravo charlie delta echo foxtrot", {
     cwd: "/repo",
     runCommand,
-    env: {
-      CODEX_ADVISOR_CONTEXT_SEARCH_TERMS: "2",
-      CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES: "1",
-      CODEX_ADVISOR_CONTEXT_DIFF_CHARS: "100",
-    },
+    context: { searchTerms: 2, fileTreeLines: 1, diffChars: 100 },
   });
 
   assert.equal(context.searchTerms.length, 2);

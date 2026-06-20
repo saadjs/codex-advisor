@@ -52,10 +52,10 @@ const SEARCH_STOP_WORDS = new Set([
   "with",
 ]);
 
-// Resolve an integer budget from an explicit option, then an env override,
+// Resolve an integer budget from an explicit option, then a settings override,
 // falling back to the constant. Invalid and below-minimum candidates are skipped.
-export function intOption(option, envValue, fallback, { min = 0 } = {}) {
-  for (const candidate of [option, envValue]) {
+export function intOption(option, settingsValue, fallback, { min = 0 } = {}) {
+  for (const candidate of [option, settingsValue]) {
     const raw = typeof candidate === "string" ? candidate.trim() : candidate;
     if (raw == null || raw === "") continue;
     const parsed = Number(raw);
@@ -255,10 +255,12 @@ async function searchTerm(run, cwd, term) {
 
 export async function gatherRepositoryContext(userPrompt, options = {}) {
   const cwd = options.cwd ?? process.cwd();
-  const env = options.env ?? process.env;
-  const maxSearchTerms = intOption(options.maxSearchTerms, env.CODEX_ADVISOR_CONTEXT_SEARCH_TERMS, DEFAULT_CONTEXT_SEARCH_TERMS);
-  const fileTreeLines = intOption(options.fileTreeLines, env.CODEX_ADVISOR_CONTEXT_FILE_TREE_LINES, DEFAULT_CONTEXT_FILE_TREE_LINES);
-  const diffChars = intOption(options.diffChars, env.CODEX_ADVISOR_CONTEXT_DIFF_CHARS, DEFAULT_CONTEXT_DIFF_CHARS);
+  // Budgets arrive as a resolved `context` object (from settings); fall back to
+  // the built-in defaults when a caller invokes this directly without one.
+  const budgets = options.context ?? {};
+  const maxSearchTerms = intOption(options.maxSearchTerms, budgets.searchTerms, DEFAULT_CONTEXT_SEARCH_TERMS);
+  const fileTreeLines = intOption(options.fileTreeLines, budgets.fileTreeLines, DEFAULT_CONTEXT_FILE_TREE_LINES);
+  const diffChars = intOption(options.diffChars, budgets.diffChars, DEFAULT_CONTEXT_DIFF_CHARS);
   const spawnCommand = options.spawnCommand ?? spawn;
   const runCommand = options.runCommand ?? ((command, args, runOptions) => runProcessCapture(command, args, {
     ...runOptions,

@@ -1,13 +1,18 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 
+import { DEFAULTS, resolveSettings } from "./codex-config.mjs";
 import { formatRepositoryContext, gatherRepositoryContext } from "./repository-context.mjs";
 
-export const DEFAULT_MODEL = "gpt-5.5";
-export const DEFAULT_CONTEXT_MODEL = "gpt-5.4-mini";
-export const DEFAULT_TIMEOUT_MS = 90000;
-export const DEFAULT_MIN_HOOK_CHARS = 40;
-export const DEFAULT_EFFORT = "low";
+export { DEFAULTS, resolveSettings } from "./codex-config.mjs";
+
+// Domain defaults live in codex-config.mjs (the single settings authority);
+// these named re-exports keep the historical import surface stable.
+export const DEFAULT_MODEL = DEFAULTS.model;
+export const DEFAULT_CONTEXT_MODEL = DEFAULTS.contextModel;
+export const DEFAULT_TIMEOUT_MS = DEFAULTS.timeoutMs;
+export const DEFAULT_MIN_HOOK_CHARS = DEFAULTS.minChars;
+export const DEFAULT_EFFORT = DEFAULTS.effort;
 export const KNOWN_MODEL_EFFORTS = new Map([
   [DEFAULT_MODEL, new Set(["low", "medium", "high", "xhigh"])],
   [DEFAULT_CONTEXT_MODEL, new Set(["low", "medium", "high", "xhigh"])],
@@ -26,7 +31,7 @@ export function formatPartialRefinementError(error) {
   const lines = [
     "Partial spec before timeout (incomplete; do not implement):",
     JSON.stringify(partialSpec),
-    "Rerun with a longer CODEX_ADVISOR_TIMEOUT_MS to get a complete spec.",
+    "Rerun with a larger timeout_ms in the [codex_advisor] table of .codex/config.toml to get a complete spec.",
   ];
   return lines.join("\n");
 }
@@ -244,12 +249,12 @@ export function extractPromptFromHookInput(input) {
   return "";
 }
 
-export function shouldSkipHook(prompt, env = process.env) {
-  if (env.CODEX_ADVISOR_DISABLE === "1" || env.CODEX_ADVISOR_DISABLE === "true") {
+export function shouldSkipHook(prompt, settings = DEFAULTS) {
+  if (settings.disable) {
     return true;
   }
 
-  const minChars = Number.parseInt(env.CODEX_ADVISOR_MIN_CHARS ?? `${DEFAULT_MIN_HOOK_CHARS}`, 10);
+  const minChars = settings.minChars ?? DEFAULT_MIN_HOOK_CHARS;
   return prompt.trim().length < minChars;
 }
 
@@ -262,21 +267,33 @@ export async function readAll(stream) {
 }
 
 export async function runCodexRefinement(userPrompt, options = {}) {
-  const env = options.env ?? process.env;
   const withContext = options.withContext ?? false;
-  const model = options.model ?? (withContext
-    ? env.CODEX_ADVISOR_CONTEXT_MODEL ?? env.CODEX_ADVISOR_MODEL ?? DEFAULT_CONTEXT_MODEL
-    : env.CODEX_ADVISOR_MODEL ?? DEFAULT_MODEL);
-  const timeoutMs = options.timeoutMs ?? Number.parseInt(env.CODEX_ADVISOR_TIMEOUT_MS ?? `${DEFAULT_TIMEOUT_MS}`, 10);
   const cwd = options.cwd ?? process.cwd();
-  const effort = normalizeEffort(options.effort ?? env.CODEX_ADVISOR_EFFORT ?? DEFAULT_EFFORT, { model });
-  const codexBin = options.codexBin ?? env.CODEX_ADVISOR_CODEX_BIN ?? "codex";
+
+  // All tunables come from one resolved settings object. Callers can inject a
+  // ready-made `settings` (the CLI builds it once and reuses it), otherwise we
+  // resolve from .codex/config.toml plus any --model/--effort flags here.
+  if (options.settings && (options.model != null || options.effort != null)) {
+    throw new Error("Cannot combine options.settings with options.model or options.effort. Apply overrides to settings before passing it.");
+  }
+  const settings = options.settings ?? resolveSettings({
+    cwd,
+    home: options.home,
+    env: options.env,
+    flags: { model: options.model, effort: options.effort },
+    readFile: options.readConfigFile,
+  });
+
+  const model = withContext ? settings.contextModel : settings.model;
+  const effort = normalizeEffort(settings.effort, { model });
+  const timeoutMs = options.timeoutMs ?? settings.timeoutMs;
+  const codexBin = options.codexBin ?? settings.codexBin;
   const spawnCodex = options.spawnCodex ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
 
   const repositoryContext = withContext
     ? options.repositoryContext ?? await gatherRepositoryContext(userPrompt, {
       cwd,
-      env,
+      context: settings.context,
       runCommand: options.runCommand,
       spawnCommand: options.spawnCommand,
     })

@@ -8,25 +8,28 @@ import {
   parseArgs,
   PartialRefinementError,
   readAll,
+  resolveSettings,
   runCodexRefinement,
   shouldSkipHook,
 } from "./codex-refine-core.mjs";
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const flags = { model: args.model, effort: args.effort };
 
   if (args.mode === "hook") {
     const input = JSON.parse(await readAll(process.stdin));
     const prompt = extractPromptFromHookInput(input);
-    if (shouldSkipHook(prompt)) {
+    const cwd = input.cwd ?? process.cwd();
+    const settings = resolveSettings({ cwd, flags });
+    if (shouldSkipHook(prompt, settings)) {
       return;
     }
 
     const refinedSpec = await runCodexRefinement(prompt, {
-      cwd: input.cwd ?? process.cwd(),
+      cwd,
       withContext: args.withContext,
-      model: args.model,
-      effort: args.effort,
+      settings,
     });
     process.stdout.write(JSON.stringify(formatHookOutput(refinedSpec, { hookOutput: args.hookOutput })));
     return;
@@ -37,10 +40,10 @@ async function main() {
     throw new Error("Provide a prompt with --text or stdin.");
   }
 
+  const settings = resolveSettings({ cwd: process.cwd(), flags });
   const refinedSpec = await runCodexRefinement(prompt, {
     withContext: args.withContext,
-    model: args.model,
-    effort: args.effort,
+    settings,
   });
   const spec = `${refinedSpec.trim()}\n`;
   // Emit to stdout first so a bad --out path can't discard the just-computed spec.
